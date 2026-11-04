@@ -1,20 +1,28 @@
 # HDRI Capture
 
-A web app that captures 360° HDRIs with an Android phone in Chrome. It shoots bracketed exposures in every direction, uses the gyro to place each shot, merges the exposures into high dynamic range and stitches them into an equirectangular **32-bit float OpenEXR** (ZIP-compressed) or a Radiance `.hdr`.
+A web app that captures 360° HDRIs with an Android phone in Chrome and exports a **32-bit float OpenEXR** (or 16-bit half / Radiance `.hdr`) ready for Blender.
 
-**Use it:** open the GitHub Pages link in Chrome on Android, then allow camera and motion access.
+**Use it:** open https://kresoart.github.io/HDRI-Capture/ in Chrome on Android, then allow camera and motion access.
 
-## How it works
-1. **Metering:** locks manual exposure, ISO and white balance where the browser allows it.
-2. **Guided capture:** shows dots for a horizon ring, upper and lower rings, the zenith and the nadir. Hold the centre ring on a dot and the app shoots the bracket (3, 5 or 7 exposures, from −10 to +2 EV).
-3. **Merge:** linearises each frame, measures the real exposure ratios from the image data, and does a weighted HDR merge.
-4. **Stitch:** projects every direction into an equirectangular map with feathered blending. Gaps are filled with push-pull interpolation.
-5. **Auto-fit lens:** searches for the field of view at which the overlapping shots agree best, which fixes seams.
+## What it does
+- **Adaptive brackets (Auto):** each direction shoots only the exposures it needs. Darker frames are added until nothing clips, brighter frames until shadows are clean. **Manual** mode sets the count (2–9), EV step and range centre yourself.
+- **Fast capture:** the next frame's brightness is predicted, so a new exposure is grabbed as soon as it arrives. The base exposure stays set between directions, merging runs in a background worker, and auto-shoot triggers after about 0.2 s of stillness.
+- **Lens measuring:** one small turn at the start measures the field of view, so the main camera and the ultra-wide both work. The ultra-wide needs about 8–10 directions instead of about 32.
+- **Handheld friendly:** the frames of each bracket are re-aligned using the gyro. After capture, auto-align refines lens, distortion and every shot's rotation from the overlaps.
+- **Sun recovery:** a phone can't capture the sun without clipping. The app detects the clipped disc and rebuilds it at a chosen strength relative to the sky (clear ≈ 8×).
+- **360° preview** with drag, pinch and gyro look-around.
+- **Saved captures:** shots are stored on the phone (IndexedDB) as you go. Reopen, re-align or re-export them later.
+
+## Blender
+World → Surface → Environment Texture → open the `.exr`. The centre of the image faces the first direction you shot.
 
 ## Camera support
-- **Manual exposure (`exposureTime`)** gives the full bracket range. Most recent Android phones support this in Chrome.
-- **Exposure compensation only** limits the range to about ±2 EV. Shots are balanced against each other afterwards, but the sun will clip.
-- **No exposure control** gives a low dynamic range result.
+- **Manual exposure (`exposureTime`):** the full range. Most recent Samsung, Pixel and other phones support this on the main camera.
+- **Exposure compensation only:** about ±2 EV. Shots are balanced against each other afterwards, but highlights clip.
+- **No exposure control:** a low dynamic range result.
 
-## Test without a phone
-Open `index.html?sim` (or `?sim=ev`) on a desktop. A synthetic HDR scene stands in for the camera, and you drag to look around.
+## Develop / test without a phone
+Serve the folder (e.g. `python3 -m http.server`) and open `index.html?sim`. A synthetic HDR scene stands in for the camera; drag to look around.
+Options: `?sim=ev` (limited exposure camera), `&lens=13` (ultra-wide), `&sun=200000` (clipped sun), `&drift=0.1` (gyro drift in °/s).
+
+Files: `index.html` (layout), `style.css`, `app.js` (UI, camera, capture flow), `core.js` (HDR math, stitching, alignment, EXR writer), `worker.js` (background merge).
