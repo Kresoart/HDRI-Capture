@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<title>HDRI Capture</title>
+<style>
+:root{--bg:#0b0d10;--panel:#151920;--line:#262c36;--text:#e8ebf0;--mute:#9aa3b2;--acc:#ffc94a;--ok:#4ade80;--bad:#f87171}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+.hidden{display:none!important}
+.screen{position:fixed;inset:0;overflow:auto}
+#home,#result{padding:calc(env(safe-area-inset-top) + 20px) 16px calc(env(safe-area-inset-bottom) + 28px)}
+.wrap{max-width:560px;margin:0 auto}
+h1{font-size:24px;margin:4px 0}
+h2{font-size:13px;margin:22px 0 6px;color:var(--mute);font-weight:600;text-transform:uppercase;letter-spacing:.07em}
+p{margin:6px 0;color:var(--mute)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:4px 14px;margin:8px 0}
+.card.pad{padding:12px 14px}
+label.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+label.row:first-child{border-top:0}
+select,input[type=number]{background:#0f1217;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:9px 10px;font:inherit;max-width:58%}
+input[type=number]{width:90px}
+input[type=range]{flex:1;accent-color:var(--acc)}
+button{font:inherit;border:0;border-radius:12px;padding:13px 14px;background:#252b35;color:var(--text);font-weight:600;cursor:pointer}
+button.primary{background:var(--acc);color:#1a1300}
+button:disabled{opacity:.4}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.btns button{flex:1 1 30%}
+.small{font-size:13px;color:var(--mute)}
+.small ul{margin:6px 0;padding-left:18px}
+.small li{margin:4px 0}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--acc)}
+#capture{background:#000;overflow:hidden}
+#video,#simview{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#overlay{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+#topbar{position:absolute;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top) + 10px) 12px 18px;background:linear-gradient(#000c,#0000);display:flex;gap:10px;align-items:flex-start;pointer-events:none}
+#statusBox{flex:1;text-shadow:0 1px 3px #000}
+#statusMain{font-weight:700;font-size:17px}
+#statusSub{font-size:12.5px;color:#d5dbe4;margin-top:2px}
+#minimap{width:140px;height:70px;border-radius:8px;background:#0009;border:1px solid #fff3;flex:none}
+#bottombar{position:absolute;left:0;right:0;bottom:0;padding:16px 12px calc(env(safe-area-inset-bottom) + 14px);background:linear-gradient(#0000,#000c)}
+#bottombar .btns{margin:0}
+#bottombar button{background:#000a;border:1px solid #fff4;color:#fff}
+#bottombar button.primary{background:var(--acc);color:#1a1300;border-color:var(--acc)}
+#setupBox{margin-bottom:10px;display:flex;gap:8px;align-items:center;justify-content:center;color:#fff;font-size:13px}
+#setupBox select{max-width:70%}
+#rotateMsg{position:absolute;inset:0;background:#000d;display:flex;align-items:center;justify-content:center;text-align:center;padding:30px;font-size:18px;font-weight:600}
+#preview{width:100%;border-radius:10px;background:#000;display:block;aspect-ratio:2/1}
+.progress{height:6px;background:#262c36;border-radius:4px;overflow:hidden;margin-top:8px}
+.progress>div{height:100%;width:0;background:var(--acc);transition:width .15s}
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 90px);transform:translateX(-50%);background:#000e;border:1px solid #fff3;color:#fff;padding:10px 14px;border-radius:10px;font-size:14px;z-index:9;max-width:90%;text-align:center}
+</style>
+</head>
+<body>
+
+<section id="home" class="screen"><div class="wrap">
+  <h1>HDRI Capture</h1>
+  <p>Takes bracketed exposures in every direction and stitches them into a 32-bit 360° HDRI (.exr / .hdr) for lighting 3D scenes.</p>
+  <div class="card pad small" id="support">Checking your phone…</div>
+
+  <h2>Settings</h2>
+  <div class="card">
+    <label class="row">Exposure brackets
+      <select id="optBrackets">
+        <option value="fast">Fast · 3 shots (−6 … +2 EV)</option>
+        <option value="indoor" selected>Indoor · 5 shots (−6 … +2 EV)</option>
+        <option value="sun">Outdoor, sun visible · 7 shots (−10 … +2 EV)</option>
+      </select></label>
+    <label class="row">Coverage
+      <select id="optDensity">
+        <option value="0.8">Fewer shots</option>
+        <option value="0.7" selected>Normal</option>
+        <option value="0.6">Extra overlap</option>
+      </select></label>
+    <label class="row">Lens (35 mm equiv.)
+      <input id="optLens" type="number" min="8" max="80" step="0.5" value="26"></label>
+    <label class="row">Output size
+      <select id="optOut">
+        <option value="2048">2K · 2048×1024</option>
+        <option value="4096" selected>4K · 4096×2048</option>
+      </select></label>
+    <label class="row">Auto-shoot when aligned
+      <select id="optAuto"><option value="1" selected>On</option><option value="0">Off</option></select></label>
+  </div>
+  <p class="small">Main cameras are usually 23–27 mm, ultra-wides 13–16 mm. If it's a bit off you can auto-correct it after capture.</p>
+  <div class="btns" style="margin-top:14px"><button class="primary" id="btnStart">Start camera</button></div>
+
+  <h2>Tips for clean HDRIs</h2>
+  <div class="card pad small"><ul>
+    <li>Rotate the phone around its <b>lens</b>, not around your body. A tripod or monopod with a pano head works best.</li>
+    <li>Aim the centre ring at the yellow dot. Once you're still, it shoots the whole bracket automatically.</li>
+    <li>Hold still until the dot turns green. If you move, it retries.</li>
+    <li>Avoid moving people and cars. Tall shots with nearby objects show seams most.</li>
+    <li>Pick “Outdoor, sun visible” whenever the sun is in frame so the sun disc isn't clipped.</li>
+  </ul></div>
+</div></section>
+
+<section id="capture" class="screen hidden">
+  <video id="video" playsinline muted></video>
+  <canvas id="simview" class="hidden"></canvas>
+  <canvas id="overlay"></canvas>
+  <div id="topbar">
+    <div id="statusBox"><div id="statusMain">Starting…</div><div id="statusSub"></div></div>
+    <canvas id="minimap" width="280" height="140"></canvas>
+  </div>
+  <div id="bottombar">
+    <div id="setupBox"><span>Camera</span><select id="camSelect"></select></div>
+    <div class="btns">
+      <button id="btnUndo">Undo</button>
+      <button id="btnShoot" class="primary">Begin</button>
+      <button id="btnFinish">Finish</button>
+    </div>
+  </div>
+  <div id="rotateMsg" class="hidden">Hold the phone upright (portrait) to capture.</div>
+</section>
+
+<section id="result" class="screen hidden"><div class="wrap">
+  <h1>Your HDRI</h1>
+  <div class="card pad" id="stitchBox"><div id="stitchMsg">Stitching…</div><div class="progress"><div id="stitchBar"></div></div></div>
+  <canvas id="preview" width="1024" height="512"></canvas>
+  <div class="card"><label class="row">Preview exposure <input type="range" id="prevEV" min="-8" max="8" step="0.25" value="0"></label></div>
+  <div class="small" id="resInfo"></div>
+  <div class="btns">
+    <button class="primary" id="btnExr">Save .exr (32-bit)</button>
+    <button id="btnHdr">Save .hdr</button>
+    <button id="btnJpg">Save .jpg preview</button>
+    <button id="btnShare" class="hidden">Share .exr…</button>
+  </div>
+  <h2>Fix seams / quality</h2>
+  <div class="card">
+    <label class="row">Lens (35 mm equiv.) <input id="resLens" type="number" min="8" max="80" step="0.1" value="26"></label>
+    <label class="row">Output size
+      <select id="resOut"><option value="2048">2K · 2048×1024</option><option value="4096">4K · 4096×2048</option></select></label>
+  </div>
+  <div class="btns">
+    <button id="btnFit">Auto-fit lens</button>
+    <button id="btnRestitch">Re-stitch</button>
+  </div>
+  <p class="small">If you see doubled edges or steps at the seams, tap “Auto-fit lens”. It measures how the overlapping shots line up and fixes the field of view.</p>
+  <div class="btns" style="margin-top:18px">
+    <button id="btnMore">Add more shots</button>
+    <button id="btnNew">New capture</button>
+  </div>
+</div></section>
+
+<script>
+'use strict';
+/* =====================================================================
+   Core: pure math / image processing (no DOM). Exposed as window.HDRCore
+   ===================================================================== */
+const HDRCore = (() => {
+  const D2R = Math.PI / 180;
+  const LIN = new Float32Array(256);
+  for (let i = 0; i < 256; i++) { const c = i / 255; LIN[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+  const EXP = new Float64Array(256);
+  for (let e = 0; e < 256; e++) EXP[e] = Math.pow(2, e - 136);
+  const SRGB_LUT = new Uint8Array(4096);
+  for (let i = 0; i < 4096; i++) { const v = i / 4095; const s = v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055; SRGB_LUT[i] = Math.max(0, Math.min(255, Math.round(s * 255))); }
+  function toSrgb8(v) { if (!(v > 0)) return 0; if (v >= 1) return 255; return SRGB_LUT[(v * 4095 + 0.5) | 0]; }
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  const median = a => { if (!a.length) return null; const s = Float64Array.from(a).sort(); return s[s.length >> 1]; };
+  const yieldUI = () => new Promise(r => setTimeout(r, 0));
+
+  /* ---------- rotations: matrices are row-major 3x3, device -> world (world: x east, y north, z up) */
+  function quatToMat(q) {
+    const [x, y, z, w] = q;
+    return [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
+            2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+            2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)];
+  }
+  function eulerToMat(alpha, beta, gamma) { // W3C deviceorientation: R = Rz(a) Rx(b) Ry(g)
+    const a = alpha * D2R, b = beta * D2R, g = gamma * D2R;
+    const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cg = Math.cos(g), sg = Math.sin(g);
+    return [ca * cg - sa * sb * sg, -sa * cb, ca * sg + sa * sb * cg,
+            sa * cg + ca * sb * sg, ca * cb, sa * sg - ca * sb * cg,
+            -cb * sg, sb, cb * cg];
+  }
+  function dirFromYP(yawDeg, pitchDeg) {
+    const y = yawDeg * D2R, p = pitchDeg * D2R;
+    return [Math.cos(p) * Math.sin(y), Math.cos(p) * Math.cos(y), Math.sin(p)];
+  }
+  // camera matrix looking at yaw/pitch with given roll (phone upright when roll = 0)
+  function lookMat(yawDeg, pitchDeg, rollDeg = 0) {
+    const y = yawDeg * D2R, r = rollDeg * D2R;
+    const f = dirFromYP(yawDeg, pitchDeg);
+    const R = [Math.cos(y), -Math.sin(y), 0];
+    const U = [R[1] * f[2] - R[2] * f[1], R[2] * f[0] - R[0] * f[2], R[0] * f[1] - R[1] * f[0]];
+    const cr = Math.cos(r), sr = Math.sin(r);
+    const R2 = [0, 1, 2].map(i => R[i] * cr + U[i] * sr), U2 = [0, 1, 2].map(i => -R[i] * sr + U[i] * cr);
+    return [R2[0], U2[0], -f[0], R2[1], U2[1], -f[1], R2[2], U2[2], -f[2]];
+  }
+  const viewDir = M => [-M[2], -M[5], -M[8]];
+  const angleBetween = (a, b) => Math.acos(clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1, 1));
+  const headingDeg = d => Math.atan2(d[0], d[1]) / D2R;
+  const focalPx = (longSidePx, lensMM) => longSidePx * lensMM / 34.6;   // 34.6 mm = long side of a 4:3 frame with 35 mm-equivalent diagonal
+
+  /* ---------- capture plan: which directions to shoot */
+  function makeTargets(hfov, vfov, ov, yaw0 = 0) {
+    const T = [];
+    const add = (yaw, pitch, ring) => T.push({ yaw, pitch, ring, dir: dirFromYP(yaw0 + yaw, pitch), done: false });
+    const ring = (pitch, idx) => {
+      const Le = Math.max(0, Math.abs(pitch) - vfov / 2);
+      const span = hfov * ov / Math.cos(Le * D2R);
+      const n = Math.max(3, Math.ceil(360 / span - 1e-6));
+      const off = (idx % 2) ? 180 / n : 0;
+      for (let i = 0; i < n; i++) add(off + i * 360 / n, pitch, idx);
+    };
+    ring(0, 0);
+    const top = 90 - hfov * 0.35, need = top - vfov / 2, vstep = vfov * ov;
+    const nr = need > 0 ? Math.ceil(need / vstep - 1e-6) : 0;
+    for (let k = 1; k <= nr; k++) ring(k * need / nr, k);
+    add(0, 90, 99);
+    for (let k = 1; k <= nr; k++) ring(-k * need / nr, k);
+    add(0, -90, -99);
+    return T;
+  }
+
+  /* ---------- exposure merge */
+  // frames: RGBA Uint8 arrays, sorted short -> long exposure. Returns ratio[k] = lin(k)/lin(k-1) (null if unknown)
+  function estimateRatios(frames, n) {
+    const out = [1];
+    for (let k = 1; k < frames.length; k++) {
+      const a = frames[k - 1], b = frames[k], vals = [];
+      for (let i = 0; i < n; i += 3) {
+        const p = i * 4, za = a[p + 1], zb = b[p + 1];
+        if (za >= 12 && za <= 215 && zb >= 25 && zb <= 215 && a[p] < 245 && a[p + 2] < 245 && b[p] < 245 && b[p + 2] < 245) vals.push(LIN[zb] / LIN[za]);
+      }
+      out.push(vals.length >= 200 ? median(vals) : null);
+    }
+    return out;
+  }
+  // scales[k]: relative exposure of frame k (radiance = linear / scale)
+  function mergeBracket(frames, scales, n) {
+    const K = frames.length, out = new Float32Array(n * 3);
+    const inv = scales.map(s => 1 / s);
+    for (let i = 0; i < n; i++) {
+      const p = i * 4; let r = 0, g = 0, b = 0, ws = 0;
+      for (let k = 0; k < K; k++) {
+        const F = frames[k], zr = F[p], zg = F[p + 1], zb = F[p + 2];
+        const zmax = zr > zg ? (zr > zb ? zr : zb) : (zg > zb ? zg : zb);
+        const zavg = (zr + zg + zb) / 765;
+        let w = 1;
+        if (k > 0) { if (zmax >= 245) continue; if (zmax > 215) w *= (245 - zmax) / 30; }
+        if (k < K - 1) { if (zavg < 0.1) w *= Math.max(zavg, 0.001) / 0.1; }
+        w *= 0.2 + 0.8 * (1 - Math.abs(2 * zavg - 1));
+        w *= scales[k];
+        const s = inv[k];
+        r += w * LIN[zr] * s; g += w * LIN[zg] * s; b += w * LIN[zb] * s; ws += w;
+      }
+      if (ws > 0) { out[i * 3] = r / ws; out[i * 3 + 1] = g / ws; out[i * 3 + 2] = b / ws; }
+    }
+    return out;
+  }
+  // chain measured ratios into scales relative to nominal base exposure
+  function scalesFrom(ratios, nominal, anchor) {
+    const c = [1];
+    for (let k = 1; k < nominal.length; k++) c.push(c[k - 1] * (ratios[k] != null ? ratios[k] : nominal[k] / nominal[k - 1]));
+    return c.map(v => v / c[anchor] * nominal[anchor]);
+  }
+
+  /* ---------- RGBE storage */
+  function toRGBE(rgb, n) {
+    const out = new Uint8Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      const r = rgb[i * 3], g = rgb[i * 3 + 1], b = rgb[i * 3 + 2];
+      const m = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      if (!(m > 1e-32)) continue;
+      let e = Math.ceil(Math.log2(m)), sc = Math.pow(2, -e) * 256;
+      if (m * sc >= 256) { e++; sc *= 0.5; }
+      if (e < -127) continue; if (e > 127) { e = 127; sc = Math.pow(2, -e) * 256; }
+      out[i * 4] = Math.min(255, r * sc) | 0; out[i * 4 + 1] = Math.min(255, g * sc) | 0; out[i * 4 + 2] = Math.min(255, b * sc) | 0; out[i * 4 + 3] = e + 128;
+    }
+    return out;
+  }
+
+  /* ---------- projection / sampling */
+  function prep(shots, f, useGain = true) {
+    return shots.map(s => {
+      const M = s.M, cx = (s.w - 1) / 2, cy = (s.h - 1) / 2;
+      const halfDiag = Math.atan(Math.hypot(cx, cy) / f);
+      return { M, v0: -M[2], v1: -M[5], v2: -M[8], cosLim: Math.cos(Math.min(halfDiag + 0.01, 3.0)), cx, cy, f,
+               w: s.w, h: s.h, D: s.rgbe, gain: useGain && s.gain ? s.gain : 1 };
+    });
+  }
+  // returns blend weight (0 = not covered) and writes radiance into o
+  function sample(q, dx, dy, dz, o) {
+    if (dx * q.v0 + dy * q.v1 + dz * q.v2 < q.cosLim) return 0;
+    const M = q.M, tz = M[2] * dx + M[5] * dy + M[8] * dz;
+    if (tz > -1e-6) return 0;
+    const iz = -q.f / tz;
+    const px = q.cx + (M[0] * dx + M[3] * dy + M[6] * dz) * iz, py = q.cy - (M[1] * dx + M[4] * dy + M[7] * dz) * iz;
+    const w = q.w, h = q.h;
+    if (!(px >= 0 && py >= 0 && px <= w - 1 && py <= h - 1)) return 0;
+    const ex = Math.min(px, w - 1 - px) / q.cx, ey = Math.min(py, h - 1 - py) / q.cy;
+    const wt = ex * ey; if (wt <= 0) return 0;
+    let x0 = px | 0, y0 = py | 0; if (x0 > w - 2) x0 = w - 2; if (y0 > h - 2) y0 = h - 2;
+    const fx = px - x0, fy = py - y0, D = q.D;
+    let r = 0, g = 0, b = 0, i = (y0 * w + x0) * 4, e, s;
+    e = D[i + 3]; if (e) { s = EXP[e] * (1 - fx) * (1 - fy); r += (D[i] + .5) * s; g += (D[i + 1] + .5) * s; b += (D[i + 2] + .5) * s; }
+    i += 4; e = D[i + 3]; if (e) { s = EXP[e] * fx * (1 - fy); r += (D[i] + .5) * s; g += (D[i + 1] + .5) * s; b += (D[i + 2] + .5) * s; }
+    i += w * 4 - 4; e = D[i + 3]; if (e) { s = EXP[e] * (1 - fx) * fy; r += (D[i] + .5) * s; g += (D[i + 1] + .5) * s; b += (D[i + 2] + .5) * s; }
+    i += 4; e = D[i + 3]; if (e) { s = EXP[e] * fx * fy; r += (D[i] + .5) * s; g += (D[i + 1] + .5) * s; b += (D[i + 2] + .5) * s; }
+    o[0] = r * q.gain; o[1] = g * q.gain; o[2] = b * q.gain;
+    return wt * wt;
+  }
+  function eqDir(x, y, W, H, yaw0Rad) {
+    const lon = ((x + 0.5) / W - 0.5) * 2 * Math.PI + yaw0Rad, lat = (0.5 - (y + 0.5) / H) * Math.PI;
+    return [Math.cos(lat) * Math.sin(lon), Math.cos(lat) * Math.cos(lon), Math.sin(lat)];
+  }
+
+  async function stitch(shots, opt) {
+    const W = opt.outW, H = opt.outH, yaw0 = (opt.yaw0 || 0) * D2R;
+    const Q = prep(shots, opt.f);
+    const out = new Float32Array(W * H * 3), cov = new Uint8Array(W * H), o = new Float64Array(3);
+    const sl = new Float64Array(W), cl = new Float64Array(W);
+    for (let x = 0; x < W; x++) { const lon = ((x + 0.5) / W - 0.5) * 2 * Math.PI + yaw0; sl[x] = Math.sin(lon); cl[x] = Math.cos(lon); }
+    let tick = performance.now();
+    for (let y = 0; y < H; y++) {
+      const lat = (0.5 - (y + 0.5) / H) * Math.PI, cz = Math.cos(lat), dz = Math.sin(lat);
+      for (let x = 0; x < W; x++) {
+        const dx = cz * sl[x], dy = cz * cl[x];
+        let r = 0, g = 0, b = 0, ws = 0;
+        for (let k = 0; k < Q.length; k++) {
+          const q = Q[k];
+          if (dx * q.v0 + dy * q.v1 + dz * q.v2 < q.cosLim) continue;
+          const w = sample(q, dx, dy, dz, o);
+          if (w > 0) { r += w * o[0]; g += w * o[1]; b += w * o[2]; ws += w; }
+        }
+        if (ws > 0) { const i = (y * W + x) * 3; out[i] = r / ws; out[i + 1] = g / ws; out[i + 2] = b / ws; cov[y * W + x] = 1; }
+      }
+      if (performance.now() - tick > 50) { opt.onProgress && opt.onProgress(y / H); await yieldUI(); tick = performance.now(); }
+    }
+    let holes = 0; for (let i = 0; i < W * H; i++) if (!cov[i]) holes++;
+    if (holes) fillHoles(out, cov, W, H);
+    return { rgb: out, holes: holes / (W * H) };
+  }
+
+  // push-pull hole filling (for missing nadir etc.)
+  function fillHoles(img, cov, W, H) {
+    const levels = [{ c: img, a: Float32Array.from(cov), W, H }];
+    while (true) {
+      const L = levels[levels.length - 1];
+      if (L.W <= 1 && L.H <= 1) break;
+      const W2 = Math.max(1, Math.ceil(L.W / 2)), H2 = Math.max(1, Math.ceil(L.H / 2));
+      const c = new Float32Array(W2 * H2 * 3), a = new Float32Array(W2 * H2);
+      for (let y = 0; y < L.H; y++) for (let x = 0; x < L.W; x++) {
+        const i = y * L.W + x, w = L.a[i]; if (!w) continue;
+        const j = (y >> 1) * W2 + (x >> 1);
+        c[j * 3] += L.c[i * 3] * w; c[j * 3 + 1] += L.c[i * 3 + 1] * w; c[j * 3 + 2] += L.c[i * 3 + 2] * w; a[j] += w;
+      }
+      let missing = 0;
+      for (let j = 0; j < W2 * H2; j++) { if (a[j]) { c[j * 3] /= a[j]; c[j * 3 + 1] /= a[j]; c[j * 3 + 2] /= a[j]; a[j] = 1; } else missing++; }
+      levels.push({ c, a, W: W2, H: H2 });
+      if (!missing) break;
+    }
+    for (let l = levels.length - 2; l >= 0; l--) {
+      const L = levels[l], P = levels[l + 1];
+      for (let y = 0; y < L.H; y++) for (let x = 0; x < L.W; x++) {
+        const i = y * L.W + x; if (L.a[i]) continue;
+        const j = (y >> 1) * P.W + (x >> 1);
+        L.c[i * 3] = P.c[j * 3]; L.c[i * 3 + 1] = P.c[j * 3 + 1]; L.c[i * 3 + 2] = P.c[j * 3 + 2]; L.a[i] = 1;
+      }
+    }
+  }
+
+  // collect per-direction luminance samples from all covering shots
+  function gridSamples(shots, f, gw, gh, minW, useGain) {
+    const Q = prep(shots, f, useGain), o = new Float64Array(3), res = [];
+    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+      const d = eqDir(x, y, gw, gh, 0); const list = [];
+      for (let k = 0; k < Q.length; k++) {
+        const w = sample(Q[k], d[0], d[1], d[2], o);
+        if (w > minW) { const L = 0.2126 * o[0] + 0.7152 * o[1] + 0.0722 * o[2]; if (L > 1e-6) list.push(k, Math.log(L)); }
+      }
+      if (list.length >= 4) res.push(list);
+    }
+    return res;
+  }
+  // exposure gain per shot so overlaps agree (used when exposure could not be locked)
+  function harmonizeGains(shots, f) {
+    const N = shots.length, S = gridSamples(shots, f, 360, 180, 0.01, false), pairs = new Map();
+    for (const l of S) for (let a = 0; a < l.length; a += 2) for (let b = a + 2; b < l.length; b += 2) {
+      let i = l[a], j = l[b], d = l[a + 1] - l[b + 1]; if (i > j) { [i, j] = [j, i]; d = -d; }
+      const key = i * N + j; let arr = pairs.get(key); if (!arr) pairs.set(key, arr = []); arr.push(d);
+    }
+    const edges = [];
+    for (const [key, arr] of pairs) if (arr.length >= 30) edges.push([Math.floor(key / N), key % N, median(arr)]);
+    const G = new Float64Array(N);
+    for (let it = 0; it < 400; it++) {
+      const sum = new Float64Array(N), cnt = new Float64Array(N);
+      for (const [i, j, d] of edges) { sum[i] += G[j] - d; cnt[i]++; sum[j] += G[i] + d; cnt[j]++; }
+      for (let i = 0; i < N; i++) if (cnt[i]) G[i] = 0.5 * G[i] + 0.5 * sum[i] / cnt[i];
+      let m = 0; for (let i = 0; i < N; i++) m += G[i]; m /= N; for (let i = 0; i < N; i++) G[i] -= m;
+    }
+    return Array.from(G, g => Math.exp(g));
+  }
+  function lensError(shots, longSide, lens) {
+    const S = gridSamples(shots, focalPx(longSide, lens), 512, 256, 0.02, true);
+    let err = 0, n = 0;
+    for (const l of S) for (let a = 0; a + 3 < l.length; a += 2) { err += Math.min(1, Math.abs(l[a + 1] - l[a + 3])); n++; }
+    return n >= 300 ? err / n : Infinity;
+  }
+  async function fitLens(shots, longSide, lens0, onProgress) {
+    let best = lens0, bestE = Infinity, steps = 0;
+    const evalAt = async F => { const e = lensError(shots, longSide, F); if (e < bestE) { bestE = e; best = F; } steps++; onProgress && onProgress(steps); await yieldUI(); return e; };
+    const lo = Math.max(8, lens0 * 0.7), hi = Math.min(80, lens0 * 1.45);
+    for (let F = lo; F <= hi; F += Math.max(0.5, lens0 * 0.035)) await evalAt(F);
+    const c0 = best;
+    for (let F = c0 - 0.75; F <= c0 + 0.75; F += 0.25) await evalAt(F);
+    const c = best;
+    for (let F = c - 0.2; F <= c + 0.2001; F += 0.1) await evalAt(+F.toFixed(2));
+    return { lens: +best.toFixed(1), error: bestE };
+  }
+
+  /* ---------- tonemapping / previews */
+  function downsample(rgb, W, H, w, h) {
+    const out = new Float32Array(w * h * 3), cnt = new Float32Array(w * h);
+    for (let y = 0; y < H; y++) { const yy = Math.min(h - 1, (y * h / H) | 0);
+      for (let x = 0; x < W; x++) { const xx = Math.min(w - 1, (x * w / W) | 0), j = yy * w + xx, i = (y * W + x) * 3;
+        out[j * 3] += rgb[i]; out[j * 3 + 1] += rgb[i + 1]; out[j * 3 + 2] += rgb[i + 2]; cnt[j]++; } }
+    for (let j = 0; j < w * h; j++) if (cnt[j]) { out[j * 3] /= cnt[j]; out[j * 3 + 1] /= cnt[j]; out[j * 3 + 2] /= cnt[j]; }
+    return out;
+  }
+  function autoEV(rgb) {
+    const L = []; for (let i = 0; i < rgb.length; i += 3 * 7) L.push(0.2126 * rgb[i] + 0.7152 * rgb[i + 1] + 0.0722 * rgb[i + 2]);
+    const m = median(L.filter(v => v > 0)) || 0.18; return Math.log2(0.18 / m);
+  }
+  function tonemap(rgb, n, ev, rgba) {
+    const k = Math.pow(2, ev);
+    const tm = x => { x *= k; return (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14); };
+    for (let i = 0; i < n; i++) { rgba[i * 4] = toSrgb8(tm(rgb[i * 3])); rgba[i * 4 + 1] = toSrgb8(tm(rgb[i * 3 + 1])); rgba[i * 4 + 2] = toSrgb8(tm(rgb[i * 3 + 2])); rgba[i * 4 + 3] = 255; }
+  }
+
+  /* ---------- file writers */
+  async function deflate(u8) {
+    const s = new Blob([u8]).stream().pipeThrough(new CompressionStream('deflate'));
+    return new Uint8Array(await new Response(s).arrayBuffer());
+  }
+  // OpenEXR, scanline, RGB 32-bit float, ZIP (16 lines) or no compression
+  async function encodeEXR(rgb, W, H, opt = {}) {
+    const zip = opt.zip !== false && typeof CompressionStream !== 'undefined';
+    const bytes = []; const enc = new TextEncoder();
+    const str = s => { for (const b of enc.encode(s)) bytes.push(b); bytes.push(0); };
+    const i32 = v => { const b = new Uint8Array(new Int32Array([v]).buffer); bytes.push(...b); };
+    const f32 = v => { const b = new Uint8Array(new Float32Array([v]).buffer); bytes.push(...b); };
+    const u8 = v => bytes.push(v & 255);
+    bytes.push(0x76, 0x2f, 0x31, 0x01); i32(2);
+    const attr = (name, type, size, fn) => { str(name); str(type); i32(size); fn(); };
+    attr('channels', 'chlist', 3 * 18 + 1, () => { for (const c of ['B', 'G', 'R']) { str(c); i32(2); u8(0); u8(0); u8(0); u8(0); i32(1); i32(1); } u8(0); });
+    attr('compression', 'compression', 1, () => u8(zip ? 3 : 0));
+    attr('dataWindow', 'box2i', 16, () => { i32(0); i32(0); i32(W - 1); i32(H - 1); });
+    attr('displayWindow', 'box2i', 16, () => { i32(0); i32(0); i32(W - 1); i32(H - 1); });
+    attr('lineOrder', 'lineOrder', 1, () => u8(0));
+    attr('pixelAspectRatio', 'float', 4, () => f32(1));
+    attr('screenWindowCenter', 'v2f', 8, () => { f32(0); f32(0); });
+    attr('screenWindowWidth', 'float', 4, () => f32(1));
+    u8(0);
+    const header = new Uint8Array(bytes);
+    const lpb = zip ? 16 : 1, nChunks = Math.ceil(H / lpb), chunks = new Array(nChunks);
+    const encodeChunk = async c => {
+      const y0 = c * lpb, lines = Math.min(lpb, H - y0), raw = new Uint8Array(lines * W * 12), dv = new DataView(raw.buffer);
+      let p = 0;
+      for (let l = 0; l < lines; l++) { const row = (y0 + l) * W * 3;
+        for (const ch of [2, 1, 0]) for (let x = 0; x < W; x++) { dv.setFloat32(p, rgb[row + x * 3 + ch], true); p += 4; } }
+      let data = raw;
+      if (zip) {
+        const n = raw.length, t = new Uint8Array(n); let a = 0, b = (n + 1) >> 1;
+        for (let i = 0; i < n; i += 2) { t[a++] = raw[i]; if (i + 1 < n) t[b++] = raw[i + 1]; }
+        let prev = t[0];
+        for (let i = 1; i < n; i++) { const cur = t[i]; t[i] = (cur - prev + 384) & 255; prev = cur; }
+        const z = await deflate(t);
+        if (z.length < n) data = z;
+      }
+      const ch = new Uint8Array(8 + data.length), cdv = new DataView(ch.buffer);
+      cdv.setInt32(0, y0, true); cdv.setInt32(4, data.length, true); ch.set(data, 8);
+      chunks[c] = ch;
+    };
+    const B = 16;
+    for (let c = 0; c < nChunks; c += B) {
+      const jobs = []; for (let k = c; k < Math.min(nChunks, c + B); k++) jobs.push(encodeChunk(k));
+      await Promise.all(jobs); opt.onProgress && opt.onProgress(Math.min(1, (c + B) / nChunks));
+    }
+    const table = new Uint8Array(nChunks * 8), tdv = new DataView(table.buffer);
+    let off = header.length + table.length;
+    for (let c = 0; c < nChunks; c++) { tdv.setBigUint64(c * 8, BigInt(off), true); off += chunks[c].length; }
+    return new Blob([header, table, ...chunks], { type: 'image/x-exr' });
+  }
+  // Radiance .hdr with RLE scanlines
+  function encodeHDR(rgb, W, H) {
+    const rgbe = toRGBE(rgb, W * H), parts = [new TextEncoder().encode(`#?RADIANCE\n# made with HDRI Capture\nFORMAT=32-bit_rle_rgbe\nEXPOSURE=1.0\n\n-Y ${H} +X ${W}\n`)];
+    if (W < 8 || W > 32767) { parts.push(rgbe); return new Blob(parts, { type: 'image/vnd.radiance' }); }
+    const buf = new Uint8Array(W * 5 + 8), comp = new Uint8Array(W);
+    for (let y = 0; y < H; y++) {
+      let p = 0; buf[p++] = 2; buf[p++] = 2; buf[p++] = W >> 8; buf[p++] = W & 255;
+      for (let c = 0; c < 4; c++) {
+        for (let x = 0; x < W; x++) comp[x] = rgbe[(y * W + x) * 4 + c];
+        let cur = 0;
+        while (cur < W) {
+          let beg = cur, run = 0, oldRun = 0;
+          while (run < 4 && beg < W) {
+            beg += run; oldRun = run; run = 1;
+            while (beg + run < W && run < 127 && comp[beg] === comp[beg + run]) run++;
+          }
+          if (oldRun > 1 && oldRun === beg - cur) { buf[p++] = 128 + oldRun; buf[p++] = comp[cur]; cur = beg; }
+          while (cur < beg) { let nr = Math.min(128, beg - cur); buf[p++] = nr; for (let i = 0; i < nr; i++) buf[p++] = comp[cur + i]; cur += nr; }
+          if (run >= 4) { buf[p++] = 128 + run; buf[p++] = comp[beg]; cur += run; }
+        }
+      }
+      parts.push(buf.slice(0, p));
+    }
+    return new Blob(parts, { type: 'image/vnd.radiance' });
+  }
+
+  /* ---------- synthetic scene (simulator / tests) */
+  const fract = v => v - Math.floor(v);
+  const hash = i => fract(Math.sin(i * 12.9898 + 4.1) * 43758.5453);
+  const SUN = dirFromYP(40, 30);
+  function simEnv(dx, dy, dz, o) {
+    const lon = Math.atan2(dx, dy), lat = Math.asin(clamp(dz, -1, 1));
+    if (dz >= 0) {
+      const ca = dx * SUN[0] + dy * SUN[1] + dz * SUN[2];
+      const idx = Math.floor((lon + Math.PI) / (2 * Math.PI) * 24);
+      const hgt = 0.06 + 0.3 * hash(idx);
+      if (lat < hgt) {
+        const base = 0.08 + 0.35 * hash(idx + 7);
+        const u = fract((lon + Math.PI) / (2 * Math.PI) * 24 * 5), v = fract(lat * 45);
+        if (u > 0.3 && u < 0.7 && v > 0.3 && v < 0.7 && hash(idx * 31 + Math.floor(lat * 45)) > 0.55) { o[0] = 6; o[1] = 4.2; o[2] = 2; return; }
+        o[0] = base * 1.1; o[1] = base; o[2] = base * 0.85; return;
+      }
+      if (ca > Math.cos(0.025)) { o[0] = 1800; o[1] = 1700; o[2] = 1500; return; }
+      const t = Math.sqrt(dz), glow = 3 * Math.exp(-(1 - ca) * 120);
+      const cloud = Math.max(0, Math.sin(lon * 7 + dz * 13) * Math.sin(lon * 3 - dz * 21)) * 0.6;
+      o[0] = 1.6 + (0.35 - 1.6) * t + glow + cloud; o[1] = 1.7 + (0.55 - 1.7) * t + glow * 0.95 + cloud; o[2] = 1.9 + (1.1 - 1.9) * t + glow * 0.85 + cloud;
+      return;
+    }
+    const px = dx / -dz, py = dy / -dz, dist = Math.hypot(px, py);
+    let v = ((Math.floor(px * 1.5) + Math.floor(py * 1.5)) & 1) ? 0.3 : 0.06;
+    if (dist > 12) v = 0.18 + (v - 0.18) * Math.max(0, 1 - (dist - 12) / 12);
+    o[0] = v * 1.05; o[1] = v; o[2] = v * 0.9;
+  }
+  // render a photo of the synthetic scene: camera matrix M, focal f (px at this size), exposure scale k
+  function simRender(M, f, w, h, k, out, noise = 0, seed = 1) {
+    const o = new Float64Array(3), cx = (w - 1) / 2, cy = (h - 1) / 2; let s = seed >>> 0;
+    const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296 - 0.5; };
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const ux = (x - cx) / f, uy = -(y - cy) / f;
+      let dx = M[0] * ux + M[1] * uy - M[2], dy = M[3] * ux + M[4] * uy - M[5], dz = M[6] * ux + M[7] * uy - M[8];
+      const L = Math.hypot(dx, dy, dz); dx /= L; dy /= L; dz /= L;
+      simEnv(dx, dy, dz, o);
+      const i = (y * w + x) * 4, nz = noise ? 1 + noise * rnd() : 1;
+      out[i] = toSrgb8(o[0] * k * nz); out[i + 1] = toSrgb8(o[1] * k * nz); out[i + 2] = toSrgb8(o[2] * k * nz); out[i + 3] = 255;
+    }
+  }
+
+  return { D2R, LIN, EXP, clamp, median, quatToMat, eulerToMat, dirFromYP, lookMat, viewDir, angleBetween, headingDeg, focalPx,
+           makeTargets, estimateRatios, mergeBracket, scalesFrom, toRGBE, prep, sample, eqDir, stitch, fillHoles,
+           harmonizeGains, lensError, fitLens, downsample, autoEV, tonemap, encodeEXR, encodeHDR, simEnv, simRender, toSrgb8 };
+})();
+window.HDRCore = HDRCore;
+
+/* =====================================================================
+   Devices: camera + orientation (real and simulated)
+   ===================================================================== */
+const SIM = new URLSearchParams(location.search).has('sim');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const $ = id => document.getElementById(id);
+
+class Orientation {
+  constructor() { this.M = null; this.t = 0; this.src = ''; this.started = false; }
+  async start() {
+    if (this.started) return !!this.M;
+    this.started = true;
+    if (SIM) { this.src = 'simulated'; this.sim = { yaw: 0, pitch: 0, roll: 0 }; this.updateSim(); return true; }
+    if ('RelativeOrientationSensor' in window) {
+      try {
+        try { await Promise.all(['accelerometer', 'gyroscope'].map(n => navigator.permissions.query({ name: n }))); } catch (e) {}
+        const s = new RelativeOrientationSensor({ frequency: 60, referenceFrame: 'device' });
+        await new Promise((res, rej) => {
+          let done = false;
+          s.onreading = () => { this.M = HDRCore.quatToMat(s.quaternion); this.t = performance.now(); if (!done) { done = true; res(); } };
+          s.onerror = e => { if (!done) { done = true; rej(e.error || e); } };
+          s.start();
+          setTimeout(() => { if (!done) { done = true; rej(new Error('sensor timeout')); } }, 1500);
+        });
+        this.sensor = s; this.src = 'gyro (RelativeOrientationSensor)'; return true;
+      } catch (e) { console.warn('RelativeOrientationSensor failed', e); try { this.sensor && this.sensor.stop(); } catch (_) {} this.M = null; }
+    }
+    if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
+      try { await DeviceOrientationEvent.requestPermission(); } catch (e) {}
+    }
+    return new Promise(res => {
+      let done = false;
+      const h = e => { if (e.alpha == null) return; this.M = HDRCore.eulerToMat(e.alpha, e.beta, e.gamma); this.t = performance.now(); if (!done) { done = true; res(true); } };
+      window.addEventListener('deviceorientation', h);
+      this.src = 'gyro (deviceorientation)';
+      setTimeout(() => { if (!done) { done = true; res(false); } }, 2500);
+    });
+  }
+  updateSim() { const s = this.sim; this.M = HDRCore.lookMat(s.yaw, s.pitch, s.roll); this.t = performance.now(); }
+}
+
+class RealCamera {
+  constructor(video) {
+    this.video = video; this.thumb = document.createElement('canvas'); this.thumb.width = 32; this.thumb.height = 32;
+    this.tctx = this.thumb.getContext('2d', { willReadFrequently: true });
+  }
+  async start(deviceId) {
+    this.stop();
+    const v = { width: { ideal: 4096 }, height: { ideal: 3072 }, frameRate: { ideal: 30 } };
+    if (deviceId) v.deviceId = { exact: deviceId }; else v.facingMode = { ideal: 'environment' };
+    this.stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false });
+    this.track = this.stream.getVideoTracks()[0];
+    this.video.srcObject = this.stream;
+    await this.video.play().catch(() => {});
+    if (!this.video.videoWidth) await new Promise(r => this.video.addEventListener('loadedmetadata', r, { once: true }));
+    await sleep(400);
+    this.caps = this.track.getCapabilities ? this.track.getCapabilities() : {};
+    this.deviceId = this.track.getSettings().deviceId;
+    const c = this.caps;
+    if (c.exposureTime && c.exposureMode && c.exposureMode.includes('manual')) this.mode = 'manual';
+    else if (c.exposureCompensation && c.exposureCompensation.max > c.exposureCompensation.min) this.mode = 'ev';
+    else this.mode = 'none';
+  }
+  get el() { return this.video; }
+  get width() { return this.video.videoWidth; }
+  get height() { return this.video.videoHeight; }
+  stop() { if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; } }
+  settings() { return this.track ? this.track.getSettings() : {}; }
+  async apply(adv) { try { await this.track.applyConstraints({ advanced: [adv] }); return true; } catch (e) { console.warn('applyConstraints', adv, e); return false; } }
+  nextFrame() {
+    return Promise.race([
+      new Promise(res => this.video.requestVideoFrameCallback ? this.video.requestVideoFrameCallback(() => res()) : requestAnimationFrame(() => res())),
+      sleep(250)]);
+  }
+  thumbMean() {
+    this.tctx.drawImage(this.video, 0, 0, 32, 32);
+    const d = this.tctx.getImageData(0, 0, 32, 32).data; let s = 0;
+    for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2];
+    return s / (32 * 32 * 3);
+  }
+  grab(ctx, w, h) { ctx.drawImage(this.video, 0, 0, w, h); return ctx.getImageData(0, 0, w, h).data; }
+}
+
+// Simulated camera rendering a synthetic HDR scene, used with ?sim for testing on a desktop.
+class SimCamera {
+  constructor(canvas, orient) {
+    this.cv = canvas; this.orient = orient; this.W = 600; this.H = 800; this.lens = 24;
+    this.t = 166.7; this.pending = []; this.frame = 0; this.ev = 0;
+    this.mode = new URLSearchParams(location.search).get('sim') === 'ev' ? 'ev' : 'manual';
+    this.caps = this.mode === 'ev' ? { exposureMode: ['continuous'], exposureCompensation: { min: -2, max: 2, step: 1 / 3 } }
+      : { exposureMode: ['continuous', 'manual'], exposureTime: { min: 0.5, max: 5000, step: 0.1 }, iso: { min: 50, max: 3200, step: 1 } };
+  }
+  async start() {
+    this.cv.width = 300; this.cv.height = 400; this.ctx = this.cv.getContext('2d'); this.img = this.ctx.createImageData(300, 400);
+    this.running = true; const loop = () => { if (!this.running) return; this.renderPreview(); setTimeout(loop, 60); }; loop();
+  }
+  get el() { return this.cv; }
+  get width() { return this.W; }
+  get height() { return this.H; }
+  stop() { this.running = false; }
+  settings() { return { exposureTime: this.t, iso: 100 }; }
+  async apply(adv) {
+    if (adv.exposureTime) this.pending.push({ at: this.frame + 2, t: adv.exposureTime });
+    if (adv.exposureCompensation != null) this.pending.push({ at: this.frame + 2, ev: adv.exposureCompensation });
+    return true;
+  }
+  async nextFrame() { await sleep(20); this.frame++; this.pending = this.pending.filter(p => { if (p.at <= this.frame) { if (p.t) this.t = p.t; if (p.ev != null) this.ev = p.ev; return false; } return true; }); }
+  k() {
+    if (this.mode === 'ev') { const d = HDRCore.viewDir(this.orient.M); return 0.25 / (1 + Math.max(0, d[2]) * 3) * Math.pow(2, this.ev); }  // fake auto-exposure
+    return this.t / 166.7 * 0.25;
+  }
+  render(w, h, data, noise) { HDRCore.simRender(this.orient.M, HDRCore.focalPx(Math.max(w, h), this.lens), w, h, this.k(), data, noise, this.frame * 7 + 1); }
+  renderPreview() { if (!this.orient.M) return; this.render(300, 400, this.img.data, 0); this.ctx.putImageData(this.img, 0, 0); }
+  thumbMean() { const d = new Uint8ClampedArray(24 * 32 * 4); this.render(24, 32, d, 0); let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2]; return s / (24 * 32 * 3); }
+  grab(ctx, w, h) { const img = ctx.createImageData(w, h); this.render(w, h, img.data, 0.02); return img.data; }
+}
+
+/* =====================================================================
+   App
+   ===================================================================== */
+const PRESETS = { fast: [-6, -2, 2], indoor: [-6, -4, -2, 0, 2], sun: [-10, -8, -6, -4, -2, 0, 2] };
+const WORK_LONG = 1152;           // stored resolution of each direction (long side)
+const TOL = 4.5;                  // degrees: how close to a target counts as aligned
+const STABLE_MS = 350, STABLE_DEG = 0.7, MOVE_ABORT_DEG = 2.0;
+const T_BASE_MAX = 333;           // 1/30 s in 100 µs units: longest metered exposure before raising ISO
+const T_LONG_MAX = 2500;          // 1/4 s: longest bracket exposure
+
+const S = {
+  orient: new Orientation(), cam: null, state: 'idle', targets: [], shots: [], plan: null, yaw0: 0, lens: 26,
+  hist: [], dwellStart: 0, dwellTarget: null, ratioHist: [], work: null, result: null, preview: null, prevBase: 0,
+  progress: 0, msg: '', wakeLock: null, opts: {}
+};
+window.App = S;
+
+function toast(text, ms = 2500) {
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = text; document.body.appendChild(t);
+  setTimeout(() => t.remove(), ms);
+}
+function show(id) { for (const s of ['home', 'capture', 'result']) $(s).classList.toggle('hidden', s !== id); }
+function setStatus(main, sub) { if (main != null) $('statusMain').textContent = main; if (sub != null) $('statusSub').textContent = sub; }
+const fmtTime = t => { const s = t * 1e-4; return s >= 0.25 ? s.toFixed(2) + ' s' : '1/' + Math.round(1 / s) + ' s'; };
+
+/* ---------- home / support check */
+function checkSupport() {
+  const lines = [];
+  const ok = (c, t) => lines.push(`<div class="${c ? 'ok' : 'bad'}">${c ? '✓' : '✗'} ${t}</div>`);
+  if (SIM) lines.push('<div class="warn">Simulator mode: uses a synthetic scene instead of the camera. Drag to look around.</div>');
+  ok(window.isSecureContext, 'Secure page (HTTPS)');
+  ok(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) || SIM, 'Camera access');
+  ok('RelativeOrientationSensor' in window || 'DeviceOrientationEvent' in window || SIM, 'Motion sensors');
+  ok(typeof CompressionStream !== 'undefined', 'EXR compression');
+  lines.push('<div style="margin-top:6px">Manual exposure support is checked once the camera starts.</div>');
+  $('support').innerHTML = lines.join('');
+}
+
+function readOpts() {
+  S.opts = {
+    preset: $('optBrackets').value, density: +$('optDensity').value, lens: +$('optLens').value || 26,
+    out: +$('optOut').value, auto: $('optAuto').value === '1'
+  };
+  try { localStorage.setItem('hdri-opts', JSON.stringify(S.opts)); } catch (e) {}
+}
+function loadOpts() {
+  try { const o = JSON.parse(localStorage.getItem('hdri-opts') || 'null'); if (!o) return;
+    $('optBrackets').value = o.preset; $('optDensity').value = String(o.density); $('optLens').value = o.lens; $('optOut').value = String(o.out); $('optAuto').value = o.auto ? '1' : '0';
+  } catch (e) {}
+}
+
+async function enterCapture(resume) {
+  readOpts();
+  if (!resume) S.lens = S.opts.lens;
+  try { if (!SIM && document.documentElement.requestFullscreen && !document.fullscreenElement) await document.documentElement.requestFullscreen({ navigationUI: 'hide' }); } catch (e) {}
+  try { if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('portrait'); } catch (e) {}
+  try { if (navigator.wakeLock) S.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  show('capture');
+  setStatus('Starting camera…', '');
+  const okOrient = await S.orient.start();
+  if (!okOrient) { setStatus('No motion sensor', 'This browser did not report gyro data. Use Chrome on Android over HTTPS.'); return; }
+  try { await startCamera(resume ? S.cam && S.cam.deviceId : null); }
+  catch (e) { console.error(e); setStatus('Camera unavailable', (e && e.name === 'NotAllowedError') ? 'Camera permission was denied. Allow it in the site settings and try again.' : String(e && e.message || e)); return; }
+  if (resume && S.plan) { await applyPreviewExposure(); S.state = 'aim'; updateButtons(); setStatus('Continue capturing', 'Aim at the remaining dots or tap Shoot.'); }
+  else { S.state = 'setup'; updateButtons(); setStatus('Point at the horizon, phone upright', describeMode() + ' Tap Begin when ready.'); }
+  requestAnimationFrame(loop);
+}
+
+async function startCamera(deviceId) {
+  if (SIM) {
+    $('video').classList.add('hidden'); $('simview').classList.remove('hidden');
+    S.cam = new SimCamera($('simview'), S.orient); await S.cam.start();
+    $('camSelect').innerHTML = '<option>Simulated camera</option>';
+    return;
+  }
+  $('simview').classList.add('hidden'); $('video').classList.remove('hidden');
+  if (!S.cam) S.cam = new RealCamera($('video'));
+  await S.cam.start(deviceId);
+  try {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    $('camSelect').innerHTML = devs.map((d, i) => `<option value="${d.deviceId}">${(d.label || 'Camera ' + (i + 1)).replace(/</g, '')}</option>`).join('');
+    $('camSelect').value = S.cam.deviceId || '';
+  } catch (e) {}
+}
+
+function describeMode() {
+  const c = S.cam; if (!c) return '';
+  const res = `${c.width}×${c.height}`;
+  if (c.mode === 'manual') return `Manual exposure ✓ (${res}).`;
+  if (c.mode === 'ev') return `⚠ Only exposure compensation available (${res}): limited dynamic range, brackets are balanced afterwards.`;
+  return `⚠ This camera allows no exposure control in the browser (${res}). The result is low dynamic range.`;
+}
+
+/* ---------- exposure planning */
+async function settle(prevMean) {
+  const cam = S.cam, t0 = performance.now();
+  const expectChange = prevMean != null && prevMean > 4 && prevMean < 250;
+  let changed = prevMean == null, last = null, stable = 0, frames = 0;
+  while (performance.now() - t0 < 2200) {
+    await cam.nextFrame(); frames++;
+    const m = cam.thumbMean();
+    if (!changed && Math.abs(m - prevMean) > Math.max(1.5, prevMean * 0.03)) changed = true;
+    if (!changed && (!expectChange && frames >= 5 || performance.now() - t0 > 900)) changed = true;
+    if (changed && last != null && Math.abs(m - last) <= Math.max(1, last * 0.02)) { if (++stable >= 2) return m; } else stable = 0;
+    last = m;
+  }
+  return last;
+}
+function manualSpec(t, iso) { const a = { exposureMode: 'manual', exposureTime: t }; if (iso) a.iso = iso; return a; }
+
+async function buildPlan() {
+  const cam = S.cam, c = cam.caps || {};
+  const evs = PRESETS[S.opts.preset] || PRESETS.indoor;
+  if (cam.mode === 'manual') {
+    setStatus('Metering…', 'Hold still');
+    const st = cam.settings();
+    const tMin = c.exposureTime.min, tMax = c.exposureTime.max;
+    const isoC = c.iso && c.iso.max > c.iso.min ? c.iso : null;
+    let t = HDRCore.clamp(st.exposureTime > 0 ? st.exposureTime : 166.7, tMin, Math.min(tMax, T_BASE_MAX));
+    let iso = isoC ? HDRCore.clamp(st.iso || 200, isoC.min, isoC.max) : null;
+    let m = cam.thumbMean();
+    for (let it = 0; it < 6; it++) {
+      await cam.apply(manualSpec(t, iso)); m = await settle(m);
+      if (m > 95 && m < 140) break;
+      let k = m <= 2 ? 16 : m >= 253 ? 1 / 16 : 0.2 / HDRCore.LIN[Math.round(m)];
+      k = HDRCore.clamp(k, 1 / 16, 16);
+      let nt = t * k;
+      if (nt > T_BASE_MAX && isoC && iso < isoC.max) { const ni = HDRCore.clamp(iso * nt / T_BASE_MAX, isoC.min, isoC.max); nt = nt * iso / ni; iso = ni; }
+      const clamped = HDRCore.clamp(nt, tMin, Math.min(tMax, T_BASE_MAX));
+      if (Math.abs(clamped - t) / t < 0.05) break;
+      t = clamped;
+    }
+    let times = evs.map(ev => HDRCore.clamp(t * Math.pow(2, ev), tMin, Math.min(tMax, T_LONG_MAX)));
+    const uniq = []; for (const x of times) if (!uniq.length || x / uniq[uniq.length - 1] > 1.3) uniq.push(x);
+    let anchor = 0, bd = Infinity; uniq.forEach((x, i) => { const d = Math.abs(Math.log(x / t)); if (d < bd) { bd = d; anchor = i; } });
+    S.plan = { mode: 'manual', base: t, iso, steps: uniq.map(x => manualSpec(x, iso)), nominal: uniq.map(x => x / t), anchor };
+  } else if (cam.mode === 'ev') {
+    const ec = c.exposureCompensation, step = ec.step || 1 / 3;
+    const r = v => HDRCore.clamp(Math.round(v / step) * step, ec.min, ec.max);
+    const list = [...new Set([r(ec.min), r(ec.min / 2), 0, r(ec.max / 2), r(ec.max)].map(v => +v.toFixed(3)))].sort((a, b) => a - b);
+    S.plan = { mode: 'ev', steps: list.map(ev => ({ exposureMode: 'continuous', exposureCompensation: ev })), nominal: list.map(ev => Math.pow(2, ev)), anchor: list.indexOf(0) };
+  } else {
+    S.plan = { mode: 'none', steps: [null], nominal: [1], anchor: 0 };
+  }
+  // lock white balance if the camera reports it
+  try {
+    const st = cam.settings();
+    if (c.whiteBalanceMode && c.whiteBalanceMode.includes('manual') && st.colorTemperature) { S.plan.wb = { whiteBalanceMode: 'manual', colorTemperature: st.colorTemperature }; await cam.apply(S.plan.wb); }
+  } catch (e) {}
+}
+async function applyPreviewExposure() {
+  const p = S.plan; if (!p || !S.cam) return;
+  if (p.wb) await S.cam.apply(p.wb);
+  if (p.mode === 'manual') await S.cam.apply(manualSpec(p.base, p.iso));
+  else if (p.mode === 'ev') await S.cam.apply({ exposureMode: 'continuous', exposureCompensation: 0 });
+}
+
+/* ---------- capture */
+async function begin() {
+  if (!S.orient.M) { toast('Waiting for motion sensor…'); return; }
+  S.state = 'busy'; updateButtons();
+  await buildPlan();
+  const cw = S.cam.width, ch = S.cam.height, long = Math.max(cw, ch);
+  const sc = Math.min(1, WORK_LONG / long);
+  S.work = { w: Math.round(cw * sc), h: Math.round(ch * sc) };
+  S.work.long = Math.max(S.work.w, S.work.h);
+  const fFrame = HDRCore.focalPx(long, S.lens);
+  const hfov = 2 * Math.atan(cw / 2 / fFrame) / HDRCore.D2R, vfov = 2 * Math.atan(ch / 2 / fFrame) / HDRCore.D2R;
+  S.yaw0 = HDRCore.headingDeg(HDRCore.viewDir(S.orient.M));
+  S.targets = HDRCore.makeTargets(hfov, vfov, S.opts.density, S.yaw0);
+  S.shots = []; S.ratioHist = []; S.result = null;
+  S.workCanvas = document.createElement('canvas'); S.workCanvas.width = S.work.w; S.workCanvas.height = S.work.h;
+  S.workCtx = S.workCanvas.getContext('2d', { willReadFrequently: true });
+  S.state = 'aim'; updateButtons();
+  setStatus(`0 / ${S.targets.length}`, `${S.plan.steps.length} exposures per direction. Aim the ring at the yellow dot.`);
+}
+
+function nearestTarget(dir, maxDeg, onlyOpen = true) {
+  let best = null, bd = maxDeg * HDRCore.D2R;
+  for (const t of S.targets) { if (onlyOpen && t.done) continue; const a = HDRCore.angleBetween(dir, t.dir); if (a < bd) { bd = a; best = t; } }
+  return best;
+}
+function nextTarget() { return S.targets.find(t => !t.done) || null; }
+
+async function captureShot(target) {
+  if (S.state !== 'aim') return;
+  S.state = 'shooting'; updateButtons();
+  const cam = S.cam, plan = S.plan, M0 = S.orient.M, d0 = HDRCore.viewDir(M0);
+  const frames = [], mats = [];
+  let prev = cam.thumbMean(), aborted = false;
+  for (let k = 0; k < plan.steps.length; k++) {
+    S.progress = k / plan.steps.length;
+    setStatus(`Hold still… ${k + 1}/${plan.steps.length}`, plan.mode === 'manual' ? fmtTime(plan.steps[k].exposureTime) : '');
+    if (plan.steps[k]) { await cam.apply(plan.steps[k]); prev = await settle(prev); } else await cam.nextFrame();
+    const M = S.orient.M;
+    if (HDRCore.angleBetween(HDRCore.viewDir(M), d0) > MOVE_ABORT_DEG * HDRCore.D2R) { aborted = true; break; }
+    frames.push(new Uint8ClampedArray(cam.grab(S.workCtx, S.work.w, S.work.h)));
+    mats.push(M);
+  }
+  S.progress = 1;
+  await applyPreviewExposure();
+  if (aborted) {
+    S.state = 'aim'; updateButtons(); S.dwellStart = 0;
+    setStatus('Moved, trying again', 'Keep the phone still until the dot turns green.');
+    if (navigator.vibrate) navigator.vibrate([40, 60, 40]);
+    return;
+  }
+  const n = S.work.w * S.work.h;
+  const ratios = HDRCore.estimateRatios(frames, n);
+  let use = ratios;
+  if (plan.mode === 'manual') {
+    S.ratioHist.push(ratios);
+    use = ratios.map((_, k) => k === 0 ? 1 : HDRCore.median(S.ratioHist.map(r => r[k]).filter(v => v != null)));
+  }
+  const scales = HDRCore.scalesFrom(use, plan.nominal, plan.anchor);
+  const rgb = HDRCore.mergeBracket(frames, scales, n);
+  const M = mats[mats.length >> 1];
+  S.shots.push({ rgbe: HDRCore.toRGBE(rgb, n), w: S.work.w, h: S.work.h, M, target, gain: 1 });
+  if (target) target.done = true;
+  if (navigator.vibrate) navigator.vibrate(30);
+  S.state = 'aim'; S.dwellStart = 0; updateButtons();
+  const left = S.targets.filter(t => !t.done).length;
+  setStatus(`${S.targets.length - left} / ${S.targets.length}`, left ? 'Next: yellow dot' : 'All directions captured');
+  if (!left) setTimeout(finish, 400);
+}
+
+function undo() {
+  if (S.state !== 'aim' || !S.shots.length) return;
+  const s = S.shots.pop(); if (s.target) s.target.done = false;
+  if (S.plan.mode === 'manual') S.ratioHist.pop();
+  setStatus(`${S.shots.length} / ${S.targets.length}`, 'Removed last shot');
+}
+
+function updateButtons() {
+  const st = S.state;
+  $('setupBox').classList.toggle('hidden', st !== 'setup' || SIM);
+  $('btnShoot').textContent = st === 'setup' ? 'Begin' : 'Shoot';
+  $('btnShoot').disabled = !(st === 'setup' || st === 'aim');
+  $('btnUndo').disabled = !(st === 'aim' && S.shots.length);
+  $('btnFinish').disabled = !(st === 'aim' && S.shots.length);
+}
+
+/* ---------- capture loop + overlay */
+function loop() {
+  if ($('capture').classList.contains('hidden')) return;
+  const M = S.orient.M;
+  const portrait = window.innerHeight >= window.innerWidth;
+  $('rotateMsg').classList.toggle('hidden', portrait || SIM);
+  if (M) {
+    const now = performance.now(), d = HDRCore.viewDir(M);
+    S.hist.push({ t: now, d }); while (S.hist.length && now - S.hist[0].t > 800) S.hist.shift();
+    if (S.state === 'aim' && portrait) {
+      const tgt = nearestTarget(d, TOL);
+      const stable = S.hist.length > 2 && now - S.hist[0].t >= STABLE_MS &&
+        S.hist.filter(h => now - h.t <= STABLE_MS).every(h => HDRCore.angleBetween(h.d, d) < STABLE_DEG * HDRCore.D2R);
+      if (tgt && stable && S.opts.auto) {
+        if (S.dwellTarget !== tgt) { S.dwellTarget = tgt; S.dwellStart = now; }
+        else if (now - S.dwellStart > 250) captureShot(tgt);
+      } else { S.dwellTarget = null; S.dwellStart = 0; }
+    }
+  }
+  drawOverlay(); drawMinimap();
+  requestAnimationFrame(loop);
+}
+
+function drawOverlay() {
+  const cv = $('overlay'), dpr = window.devicePixelRatio || 1, sw = cv.clientWidth, sh = cv.clientHeight;
+  if (cv.width !== Math.round(sw * dpr) || cv.height !== Math.round(sh * dpr)) { cv.width = Math.round(sw * dpr); cv.height = Math.round(sh * dpr); }
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, sw, sh);
+  const M = S.orient.M, cam = S.cam; if (!M || !cam || !cam.width) return;
+  const vw = cam.width, vh = cam.height, sc = Math.max(sw / vw, sh / vh), ox = (sw - vw * sc) / 2, oy = (sh - vh * sc) / 2;
+  const f = HDRCore.focalPx(Math.max(vw, vh), S.lens), cx = vw / 2, cy = vh / 2;
+  const toDev = d => [M[0] * d[0] + M[3] * d[1] + M[6] * d[2], M[1] * d[0] + M[4] * d[1] + M[7] * d[2], M[2] * d[0] + M[5] * d[1] + M[8] * d[2]];
+  const project = d => { const t = toDev(d); if (t[2] > -0.08) return null; return [ox + (cx + f * t[0] / -t[2]) * sc, oy + (cy - f * t[1] / -t[2]) * sc]; };
+  const mx = sw / 2, my = sh / 2;
+  // horizon line
+  ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.beginPath(); let first = true;
+  for (let a = -180; a <= 180; a += 3) { const p = project(HDRCore.dirFromYP(a, 0)); if (!p) { first = true; continue; } if (first) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); first = false; }
+  ctx.stroke();
+  const nxt = S.state === 'aim' || S.state === 'shooting' ? nextTarget() : null;
+  for (const t of S.targets) {
+    const p = project(t.dir); if (!p) continue;
+    ctx.beginPath();
+    if (t.done) { ctx.fillStyle = 'rgba(74,222,128,.85)'; ctx.arc(p[0], p[1], 7, 0, 7); ctx.fill(); }
+    else if (t === nxt) { ctx.fillStyle = 'rgba(255,201,74,.95)'; ctx.arc(p[0], p[1], 13, 0, 7); ctx.fill(); }
+    else { ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 2; ctx.arc(p[0], p[1], 10, 0, 7); ctx.stroke(); }
+  }
+  // arrow to next target when off screen
+  if (nxt) {
+    const p = project(nxt.dir);
+    if (!p || p[0] < 20 || p[1] < 90 || p[0] > sw - 20 || p[1] > sh - 120) {
+      const t = toDev(nxt.dir); let vx = t[0], vy = -t[1]; const L = Math.hypot(vx, vy) || 1; vx /= L; vy /= L;
+      const r = Math.min(sw, sh) * 0.3, ax = mx + vx * r, ay = my + vy * r;
+      ctx.save(); ctx.translate(ax, ay); ctx.rotate(Math.atan2(vy, vx));
+      ctx.fillStyle = 'rgba(255,201,74,.95)'; ctx.beginPath(); ctx.moveTo(18, 0); ctx.lineTo(-10, -13); ctx.lineTo(-4, 0); ctx.lineTo(-10, 13); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
+  // reticle
+  ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.arc(mx, my, 24, 0, 7); ctx.stroke();
+  let prog = 0;
+  if (S.state === 'shooting') prog = S.progress;
+  else if (S.dwellTarget && S.dwellStart) prog = Math.min(1, (performance.now() - S.dwellStart) / 250) * 0.15;
+  if (prog > 0) { ctx.strokeStyle = S.state === 'shooting' ? '#4ade80' : '#ffc94a'; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(mx, my, 24, -Math.PI / 2, -Math.PI / 2 + prog * 2 * Math.PI); ctx.stroke(); }
+}
+
+function drawMinimap() {
+  const cv = $('minimap'), ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(255,255,255,.2)'; ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+  const pos = d => { let lon = Math.atan2(d[0], d[1]) / HDRCore.D2R - S.yaw0; lon = ((lon + 540) % 360) - 180; const lat = Math.asin(d[2]) / HDRCore.D2R; return [(lon / 360 + 0.5) * W, (0.5 - lat / 180) * H]; };
+  const nxt = nextTarget();
+  for (const t of S.targets) { const [x, y] = pos(t.dir); ctx.fillStyle = t.done ? '#4ade80' : t === nxt ? '#ffc94a' : 'rgba(255,255,255,.55)'; ctx.beginPath(); ctx.arc(x, y, t === nxt ? 6 : 4, 0, 7); ctx.fill(); }
+  if (S.orient.M) { const [x, y] = pos(HDRCore.viewDir(S.orient.M)); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 8, 0, 7); ctx.stroke(); }
+}
+
+/* ---------- finishing / stitching */
+async function finish() {
+  if (!S.shots.length) return;
+  S.state = 'done'; updateButtons();
+  if (S.cam) S.cam.stop();
+  try { S.wakeLock && S.wakeLock.release(); } catch (e) {}
+  try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (e) {}
+  show('result');
+  $('resLens').value = S.lens; $('resOut').value = String(S.opts.out);
+  await runStitch();
+}
+
+function setBusy(on, msg) {
+  $('stitchBox').classList.toggle('hidden', !on);
+  if (msg) $('stitchMsg').textContent = msg;
+  for (const id of ['btnExr', 'btnHdr', 'btnJpg', 'btnShare', 'btnFit', 'btnRestitch', 'btnMore', 'btnNew']) $(id).disabled = on;
+}
+
+async function runStitch() {
+  setBusy(true, 'Stitching…'); $('stitchBar').style.width = '0%';
+  await new Promise(r => setTimeout(r, 30));
+  const f = HDRCore.focalPx(S.work.long, S.lens);
+  if (S.plan.mode !== 'manual' && S.shots.length > 1) {
+    $('stitchMsg').textContent = 'Balancing exposures…'; await new Promise(r => setTimeout(r, 30));
+    const g = HDRCore.harmonizeGains(S.shots, f); S.shots.forEach((s, i) => s.gain = g[i]);
+  }
+  $('stitchMsg').textContent = 'Stitching…';
+  const W = +$('resOut').value, H = W / 2;
+  const t0 = performance.now();
+  const res = await HDRCore.stitch(S.shots, { outW: W, outH: H, f, yaw0: S.yaw0, onProgress: p => $('stitchBar').style.width = (p * 100).toFixed(0) + '%' });
+  S.result = { W, H, rgb: res.rgb, holes: res.holes, ms: performance.now() - t0 };
+  S.preview = HDRCore.downsample(res.rgb, W, H, 1024, 512);
+  S.prevBase = HDRCore.autoEV(S.preview);
+  $('prevEV').value = 0;
+  drawPreview();
+  const open = S.targets.filter(t => !t.done).length;
+  $('resInfo').innerHTML = `${W}×${H} · ${S.shots.length} directions × ${S.plan.steps.length} exposures · lens ${S.lens} mm` +
+    (S.plan.mode === 'manual' ? ` · ISO ${S.plan.iso ? Math.round(S.plan.iso) : 'auto'}` : '') +
+    (open ? ` · <span class="warn">${open} directions not captured (filled in)</span>` : '') +
+    (res.holes > 0.002 ? ` · <span class="warn">${(res.holes * 100).toFixed(1)}% of the sphere estimated</span>` : '');
+  $('btnShare').classList.toggle('hidden', !(navigator.canShare && navigator.canShare({ files: [new File([new Uint8Array(1)], 'x.exr', { type: 'image/x-exr' })] })));
+  setBusy(false);
+}
+
+function drawPreview() {
+  if (!S.preview) return;
+  const cv = $('preview'), ctx = cv.getContext('2d'), img = ctx.createImageData(1024, 512);
+  HDRCore.tonemap(S.preview, 1024 * 512, S.prevBase + +$('prevEV').value, img.data);
+  ctx.putImageData(img, 0, 0);
+}
+
+function stamp() { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; }
+function saveBlob(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
+}
+async function makeEXR() {
+  setBusy(true, 'Writing EXR…');
+  const b = await HDRCore.encodeEXR(S.result.rgb, S.result.W, S.result.H, { onProgress: p => $('stitchBar').style.width = (p * 100).toFixed(0) + '%' });
+  setBusy(false); return b;
+}
+
+/* ---------- wiring */
+function wire() {
+  loadOpts(); checkSupport();
+  $('btnStart').onclick = () => enterCapture(false);
+  $('btnShoot').onclick = () => {
+    if (S.state === 'setup') begin();
+    else if (S.state === 'aim') captureShot(nearestTarget(HDRCore.viewDir(S.orient.M), 15));
+  };
+  $('btnUndo').onclick = undo;
+  $('btnFinish').onclick = finish;
+  $('camSelect').onchange = async e => { try { await startCamera(e.target.value); setStatus(null, describeMode() + ' Tap Begin when ready.'); } catch (err) { toast('Could not switch camera'); } };
+  $('prevEV').oninput = drawPreview;
+  $('btnRestitch').onclick = () => { S.lens = +$('resLens').value || S.lens; runStitch(); };
+  $('btnFit').onclick = async () => {
+    if (S.shots.length < 2) { toast('Need at least two overlapping shots'); return; }
+    setBusy(true, 'Measuring seams…'); let n = 0;
+    const r = await HDRCore.fitLens(S.shots, S.work.long, S.lens, k => { n = k; $('stitchBar').style.width = Math.min(100, k * 3) + '%'; });
+    if (!isFinite(r.error)) { setBusy(false); toast('Not enough overlap to measure. Try “Extra overlap”.'); return; }
+    S.lens = r.lens; $('resLens').value = r.lens; toast(`Lens set to ${r.lens} mm`);
+    await runStitch();
+  };
+  $('btnExr').onclick = async () => saveBlob(await makeEXR(), `hdri_${stamp()}.exr`);
+  $('btnHdr').onclick = () => saveBlob(HDRCore.encodeHDR(S.result.rgb, S.result.W, S.result.H), `hdri_${stamp()}.hdr`);
+  $('btnJpg').onclick = () => {
+    const { W, H, rgb } = S.result, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d'), img = ctx.createImageData(W, H);
+    HDRCore.tonemap(rgb, W * H, S.prevBase + +$('prevEV').value, img.data); ctx.putImageData(img, 0, 0);
+    cv.toBlob(b => saveBlob(b, `hdri_${stamp()}_preview.jpg`), 'image/jpeg', 0.92);
+  };
+  $('btnShare').onclick = async () => {
+    try { const b = await makeEXR(); await navigator.share({ files: [new File([b], `hdri_${stamp()}.exr`, { type: 'image/x-exr' })], title: 'HDRI' }); }
+    catch (e) { if (e.name !== 'AbortError') toast('Sharing failed, use Save instead'); }
+  };
+  $('btnMore').onclick = () => { S.result = null; enterCapture(true); };
+  $('btnNew').onclick = () => { S.shots = []; S.targets = []; S.result = null; S.preview = null; S.state = 'idle'; show('home'); };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.state === 'aim') applyPreviewExposure(); });
+  window.addEventListener('beforeunload', e => { if (S.shots.length) { e.preventDefault(); e.returnValue = ''; } });
+
+  if (SIM) {   // drag to look around in simulator mode
+    let drag = null;
+    const ov = $('overlay');
+    ov.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, yaw: S.orient.sim.yaw, pitch: S.orient.sim.pitch }; ov.setPointerCapture(e.pointerId); });
+    ov.addEventListener('pointermove', e => { if (!drag) return; S.orient.sim.yaw = drag.yaw - (e.clientX - drag.x) * 0.15; S.orient.sim.pitch = HDRCore.clamp(drag.pitch + (e.clientY - drag.y) * 0.15, -90, 90); S.orient.updateSim(); });
+    ov.addEventListener('pointerup', () => drag = null);
+    window.simLook = (yaw, pitch, roll = 0) => { Object.assign(S.orient.sim, { yaw, pitch, roll }); S.orient.updateSim(); };
+  }
+}
+wire();
+</script>
+</body>
+</html>
