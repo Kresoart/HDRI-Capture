@@ -25,7 +25,7 @@ self.MergeEngine = (() => {
     } else {
       scales = C.scalesFrom(ratios, m.idx.map(j => cfg.nominal[j]), m.ref);
     }
-    const rgb = C.mergeBracket(frames, scales, n);
+    const rgb = C.mergeBracket(frames, scales, n, m.ref);
     const rgbe = C.toRGBE(rgb, n);
     return { type: 'merged', id: m.id, rgbe, clip: C.LIN[250] / scales[0], frames: frames.length };
   }

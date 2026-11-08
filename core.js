@@ -124,11 +124,28 @@ self.HDRCore = (() => {
     }
     return out;
   }
-  function mergeBracket(frames, scales, n) {
-    const K = frames.length, out = new Float32Array(n * 3), inv = scales.map(s => 1 / s);
+  // merge a bracket; ref = index of the reference frame used to reject ghosts (moving things, misaligned frames)
+  function mergeBracket(frames, scales, n, ref = -1) {
+    const K = frames.length, out = new Float32Array(n * 3), inv = scales.map(s => 1 / s), rej = new Uint8Array(K);
+    const good = (F, p) => { const r = F[p], g = F[p + 1], b = F[p + 2], m = r > g ? (r > b ? r : b) : (g > b ? g : b); return F[p + 3] && m < 240 && r + g + b > 60; };
+    const rad = (F, p, k) => (LIN[F[p]] + LIN[F[p + 1]] + LIN[F[p + 2]]) * inv[k];
     for (let i = 0; i < n; i++) {
       const p = i * 4; let r = 0, g = 0, b = 0, ws = 0;
+      if (ref >= 0 && K > 1) {
+        rej.fill(0);
+        const t0 = good(frames[ref], p) ? rad(frames[ref], p, ref) : 0;
+        for (let dir = -1; dir <= 1; dir += 2) {
+          let trust = t0;
+          for (let k = ref + dir; k >= 0 && k < K; k += dir) {
+            const F = frames[k];
+            if (!good(F, p)) continue;
+            const v = rad(F, p, k);
+            if (trust > 0 && Math.abs(Math.log(v / trust)) > 0.35) rej[k] = 1; else trust = v;
+          }
+        }
+      }
       for (let k = 0; k < K; k++) {
+        if (rej[k]) continue;
         const F = frames[k]; if (!F[p + 3]) continue;
         const zr = F[p], zg = F[p + 1], zb = F[p + 2];
         const zmax = zr > zg ? (zr > zb ? zr : zb) : (zg > zb ? zg : zb), zavg = (zr + zg + zb) / 765;
@@ -140,6 +157,7 @@ self.HDRCore = (() => {
         r += w * LIN[zr] * s; g += w * LIN[zg] * s; b += w * LIN[zb] * s; ws += w;
       }
       if (ws > 0) { out[i * 3] = r / ws; out[i * 3 + 1] = g / ws; out[i * 3 + 2] = b / ws; }
+      else if (ref >= 0) { const F = frames[ref], s = inv[ref]; out[i * 3] = LIN[F[p]] * s; out[i * 3 + 1] = LIN[F[p + 1]] * s; out[i * 3 + 2] = LIN[F[p + 2]] * s; }
     }
     return out;
   }
@@ -205,7 +223,8 @@ self.HDRCore = (() => {
       const M = s.M, cx = (s.w - 1) / 2, cy = (s.h - 1) / 2;
       const halfDiag = Math.atan(Math.hypot(cx, cy) / f) * (1 + Math.max(0, -k1));
       return { M, v0: -M[2], v1: -M[5], v2: -M[8], cosLim: Math.cos(Math.min(halfDiag + 0.03, 3.0)), cx, cy, f, k1,
-               rn2: f * f / (cx * cx + cy * cy), w: s.w, h: s.h, D: s.rgbe, gain: useGain && s.gain ? s.gain : 1 };
+               rn2: f * f / (cx * cx + cy * cy), w: s.w, h: s.h, D: s.rgbe, gain: useGain && s.gain ? s.gain : 1,
+               clip: (s.clip > 0 && isFinite(s.clip) ? s.clip : Infinity) * (useGain && s.gain ? s.gain : 1), shot: s };
     });
   }
   function sample(q, dx, dy, dz, o) {
@@ -226,7 +245,7 @@ self.HDRCore = (() => {
     i += 4; e = D[i + 3]; if (e) { s = EXP[e] * fx * (1 - fy); r += (D[i] + .5) * s; g += (D[i + 1] + .5) * s; b += (D[i + 2] + .5) * s; }
     i += w * 4 - 4; e = D[i + 3]; if (e) { s = EXP[e] * (1 - fx) * fy; r += (D[i] + .5) * s; g += (D[i + 1] + .5) * s; b += (D[i + 2] + .5) * s; }
     i += 4; e = D[i + 3]; if (e) { s = EXP[e] * fx * fy; r += (D[i] + .5) * s; g += (D[i + 1] + .5) * s; b += (D[i + 2] + .5) * s; }
-    o[0] = r * q.gain; o[1] = g * q.gain; o[2] = b * q.gain;
+    o[0] = r * q.gain; o[1] = g * q.gain; o[2] = b * q.gain; o[3] = px; o[4] = py; o[5] = ex < ey ? ex : ey;
     return wt * wt;
   }
   function eqDir(x, y, W, H, yaw0Rad) {
@@ -234,25 +253,41 @@ self.HDRCore = (() => {
     return [Math.cos(lat) * Math.sin(lon), Math.cos(lat) * Math.cos(lon), Math.sin(lat)];
   }
 
+  // Stitching: each output pixel blends the shots that see it with weight edgeDistance^power. A high power gives a
+  // narrow transition halfway through each overlap, so misaligned details are cut at a seam instead of
+  // showing up twice. Clipped shots give way to shots that measured the light. power = 1 is a classic wide feather.
   async function stitch(shots, opt) {
-    const W = opt.outW, H = opt.outH, yaw0 = (opt.yaw0 || 0) * D2R;
+    const W = opt.outW, H = opt.outH, yaw0 = (opt.yaw0 || 0) * D2R, P = opt.blend === 'feather' ? 0 : (opt.power || 24);
     const Q = prep(shots, opt.f, true, opt.k1 || 0);
-    const out = new Float32Array(W * H * 3), cov = new Uint8Array(W * H), o = new Float64Array(3);
+    const out = new Float32Array(W * H * 3), cov = new Uint8Array(W * H), o = new Float64Array(6);
+    const MAXC = 24, cw = new Float64Array(MAXC), crad = new Float64Array(MAXC * 3), csat = new Uint8Array(MAXC);
     const sl = new Float64Array(W), cl = new Float64Array(W);
     for (let x = 0; x < W; x++) { const lon = ((x + 0.5) / W - 0.5) * 2 * Math.PI + yaw0; sl[x] = Math.sin(lon); cl[x] = Math.cos(lon); }
     let tick = Date.now();
     for (let y = 0; y < H; y++) {
       const lat = (0.5 - (y + 0.5) / H) * Math.PI, cz = Math.cos(lat), dz = Math.sin(lat);
       for (let x = 0; x < W; x++) {
-        const dx = cz * sl[x], dy = cz * cl[x];
-        let r = 0, g = 0, b = 0, ws = 0;
-        for (let k = 0; k < Q.length; k++) {
+        const dx = cz * sl[x], dy = cz * cl[x], i = (y * W + x) * 3;
+        let n = 0, anyUnsat = false;
+        for (let k = 0; k < Q.length && n < MAXC; k++) {
           const q = Q[k];
           if (dx * q.v0 + dy * q.v1 + dz * q.v2 < q.cosLim) continue;
-          const w = sample(q, dx, dy, dz, o);
-          if (w > 0) { r += w * o[0]; g += w * o[1]; b += w * o[2]; ws += w; }
+          const w0 = sample(q, dx, dy, dz, o);
+          if (!(w0 > 0)) continue;
+          cw[n] = P ? Math.pow(o[5], P) : w0;
+          crad[n * 3] = o[0]; crad[n * 3 + 1] = o[1]; crad[n * 3 + 2] = o[2];
+          const sat = lum(o[0], o[1], o[2]) >= 0.9 * q.clip; csat[n] = sat ? 1 : 0; if (!sat) anyUnsat = true;
+          n++;
         }
-        if (ws > 0) { const i = (y * W + x) * 3; out[i] = r / ws; out[i + 1] = g / ws; out[i + 2] = b / ws; cov[y * W + x] = 1; }
+        if (!n) continue;
+        cov[y * W + x] = 1;
+        let r = 0, g = 0, b = 0, ws = 0;
+        if (!anyUnsat) {   // clipped in every shot: keep the one that measured the most light
+          let best = 0, bl = -1; for (let k = 0; k < n; k++) { const L = lum(crad[k * 3], crad[k * 3 + 1], crad[k * 3 + 2]); if (L > bl) { bl = L; best = k; } }
+          out[i] = crad[best * 3]; out[i + 1] = crad[best * 3 + 1]; out[i + 2] = crad[best * 3 + 2]; continue;
+        }
+        for (let k = 0; k < n; k++) { const w = csat[k] ? cw[k] * 1e-6 : cw[k]; r += w * crad[k * 3]; g += w * crad[k * 3 + 1]; b += w * crad[k * 3 + 2]; ws += w; }
+        if (ws > 0) { out[i] = r / ws; out[i + 1] = g / ws; out[i + 2] = b / ws; }
       }
       if (Date.now() - tick > 50) { opt.onProgress && opt.onProgress(y / H); await yieldUI(); tick = Date.now(); }
     }
@@ -289,12 +324,12 @@ self.HDRCore = (() => {
 
   /* ---------- alignment */
   function gridSamples(shots, f, gw, gh, minW, useGain, k1) {
-    const Q = prep(shots, f, useGain, k1), o = new Float64Array(3), res = [];
+    const Q = prep(shots, f, useGain, k1), o = new Float64Array(6), res = [];
     for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
       const d = eqDir(x, y, gw, gh, 0); let list = null;
       for (let k = 0; k < Q.length; k++) {
         const w = sample(Q[k], d[0], d[1], d[2], o);
-        if (w > minW) { const L = lum(o[0], o[1], o[2]); if (L > 1e-6) (list || (list = [])).push(k, Math.log(L)); }
+        if (w > minW) { const L = lum(o[0], o[1], o[2]); if (L > 1e-6 && L < 0.9 * Q[k].clip) (list || (list = [])).push(k, Math.log(L)); }
       }
       if (list && list.length >= 4) res.push(list);
     }
@@ -340,7 +375,7 @@ self.HDRCore = (() => {
   }
   // per-shot rotation refinement against overlapping neighbours (fixes gyro drift / handheld error)
   async function refineRotations(shots, f, k1, onProgress, passes = 2) {
-    const Q = prep(shots, f, true, k1), N = Q.length, o = new Float64Array(3);
+    const Q = prep(shots, f, true, k1), N = Q.length, o = new Float64Array(6);
     const half = Q.map(q => Math.acos(q.cosLim));
     const nb = Q.map((q, i) => { const l = []; for (let j = 0; j < N; j++) if (j !== i && q.v0 * Q[j].v0 + q.v1 * Q[j].v1 + q.v2 * Q[j].v2 > Math.cos(Math.min(Math.PI, half[i] + half[j]))) l.push(j); return l; });
     const PT = shots.map((s, i) => {
@@ -545,6 +580,8 @@ self.HDRCore = (() => {
   const sim = { sun: 1800, sunDir: dirFromYP(40, 30) };
   function simEnv(dx, dy, dz, o) {
     const lon = Math.atan2(dx, dy), lat = Math.asin(clamp(dz, -1, 1)), S = sim.sunDir;
+    if (sim.mover) { let dl = lon - sim.mlon; dl -= Math.round(dl / (2 * Math.PI)) * 2 * Math.PI;
+      if (Math.abs(dl) < 0.06 && lat > 0.0 && lat < 0.12) { o[0] = 2.5; o[1] = 0.25; o[2] = 0.2; return; } }
     if (dz >= 0) {
       const ca = dx * S[0] + dy * S[1] + dz * S[2];
       const idx = Math.floor((lon + Math.PI) / (2 * Math.PI) * 24), hgt = 0.06 + 0.3 * hash(idx);
@@ -566,7 +603,7 @@ self.HDRCore = (() => {
     o[0] = v * 1.05; o[1] = v; o[2] = v * 0.9;
   }
   function simRender(M, f, w, h, k, out, noise = 0, seed = 1) {
-    const o = new Float64Array(3), cx = (w - 1) / 2, cy = (h - 1) / 2; let s = seed >>> 0;
+    const o = new Float64Array(6), cx = (w - 1) / 2, cy = (h - 1) / 2; let s = seed >>> 0;
     const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296 - 0.5; };
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const ux = (x - cx) / f, uy = -(y - cy) / f;

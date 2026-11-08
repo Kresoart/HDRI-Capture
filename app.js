@@ -79,9 +79,9 @@ class Orientation {
     this.started = true;
     if (SIM) {
       this.src = 'simulated'; this.sim = { yaw: 0, pitch: 0, roll: 0 }; this.t0 = performance.now();
-      this.drift = +QS.get('drift') || 0;
+      this.drift = +QS.get('drift') || 0; this.wobble = +QS.get('wobble') || 0;
       const upd = () => { const s = this.sim, dt = (performance.now() - this.t0) / 1000;
-        this.trueM = C.lookMat(s.yaw, s.pitch, s.roll); this.M = C.lookMat(s.yaw + this.drift * dt, s.pitch, s.roll); };
+        this.trueM = C.lookMat(s.yaw, s.pitch, s.roll); this.M = C.lookMat(s.yaw + this.drift * dt + (s.ey || 0), s.pitch + (s.ep || 0), s.roll + (s.er || 0)); };
       upd(); setInterval(upd, 16); return true;
     }
     if ('RelativeOrientationSensor' in window) {
@@ -151,7 +151,8 @@ class SimCamera {   // renders a synthetic HDR scene; ?sim[=ev]&lens=24&sun=1800
   constructor(canvas, orient) {
     this.cv = canvas; this.orient = orient; this.W = 720; this.H = 960; this.lens = +QS.get('lens') || 24;
     if (QS.get('sun')) C.sim.sun = +QS.get('sun');
-    this.t = 166.7; this.ev = 0; this.pending = []; this.frame = 0;
+    if (QS.get('mover')) C.sim.mover = true;
+    this.t = 166.7; this.iso = 100; this.ev = 0; this.pending = []; this.frame = 0;
     this.mode = QS.get('sim') === 'ev' ? 'ev' : 'manual';
     this.caps = this.mode === 'ev' ? { exposureMode: ['continuous'], exposureCompensation: { min: -2, max: 2, step: 1 / 3 } }
       : { exposureMode: ['continuous', 'manual'], exposureTime: { min: 0.5, max: 5000, step: 0.1 }, iso: { min: 50, max: 3200, step: 1 }, whiteBalanceMode: ['continuous'] };
@@ -165,18 +166,18 @@ class SimCamera {   // renders a synthetic HDR scene; ?sim[=ev]&lens=24&sun=1800
   get width() { return this.W; }
   get height() { return this.H; }
   stop() { this.running = false; }
-  settings() { return { exposureTime: this.t, iso: 100 }; }
+  settings() { return { exposureTime: this.t, iso: this.iso }; }
   async apply(adv) {
-    if (adv.exposureTime) this.pending.push({ at: this.frame + 2, t: adv.exposureTime });
+    if (adv.exposureTime) this.pending.push({ at: this.frame + 2, t: adv.exposureTime, iso: adv.iso });
     if (adv.exposureCompensation != null) this.pending.push({ at: this.frame + 2, ev: adv.exposureCompensation });
     return true;
   }
-  async nextFrame() { await sleep(33); this.frame++; this.pending = this.pending.filter(p => { if (p.at > this.frame) return true; if (p.t) this.t = p.t; if (p.ev != null) this.ev = p.ev; return false; }); }
+  async nextFrame() { await sleep(33); this.frame++; this.pending = this.pending.filter(p => { if (p.at > this.frame) return true; if (p.t) this.t = p.t; if (p.iso) this.iso = p.iso; if (p.ev != null) this.ev = p.ev; return false; }); }
   k() {
     if (this.mode === 'ev') { const d = C.viewDir(this.orient.trueM); return 0.25 / (1 + Math.max(0, d[2]) * 3) * Math.pow(2, this.ev); }
-    return this.t / 166.7 * 0.25;
+    return this.t / 166.7 * 0.25 * this.iso / 100;
   }
-  render(w, h, data, noise) { if (this.orient.trueM) C.simRender(this.orient.trueM, C.focalPx(Math.max(w, h), this.lens), w, h, this.k(), data, noise, this.frame * 7 + 1); }
+  render(w, h, data, noise) { C.sim.mlon = (this.frame * 0.035) % (2 * Math.PI) - Math.PI; if (this.orient.trueM) C.simRender(this.orient.trueM, C.focalPx(Math.max(w, h), this.lens), w, h, this.k(), data, noise, this.frame * 7 + 1); }
   thumb() { const d = new Uint8ClampedArray(24 * 32 * 4); this.render(24, 32, d, 0); let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2]; return { d, mean: s / (24 * 32 * 3) }; }
   grab(ctx, w, h) { const img = ctx.createImageData(w, h); this.render(w, h, img.data, 0.02); return img.data; }
 }
@@ -358,6 +359,7 @@ async function waitExposure(prev, ratio) {
   return th || cam.thumb();
 }
 const manualSpec = (t, iso) => { const a = { exposureMode: 'manual', exposureTime: t }; if (iso) a.iso = iso; return a; };
+const fmtStep = j => { const P = S.plan; return fmtTime(P.shutter[j]) + (P.isos ? ' ISO ' + P.isos[j] : ''); };
 
 async function buildPlan() {
   const cam = S.cam, c = cam.caps || {}, o = S.opts, L = lim();
@@ -383,19 +385,29 @@ async function buildPlan() {
       if (Math.abs(nc - t) / t < 0.05) break;
       t = nc;
     }
+    // ladder in "exposure" units (shutter time at the metered ISO). Darker steps use the fastest shutter, then drop
+    // to the lowest ISO, which adds highlight range; brighter steps may raise ISO once the handheld shutter limit is hit.
+    const isoLo = isoC ? isoC.min : iso, isoHi = isoC ? Math.min(isoC.max, Math.max(iso * 4, 800)) : iso;
+    const eMin = isoC ? tMin * isoLo / iso : tMin;
+    const realise = E => {
+      if (!isoC) { const sh = C.clamp(E, tMin, longMax); return [sh, iso, sh]; }
+      if (E <= t) { const sh = Math.max(E, tMin), is = Math.round(C.clamp(iso * E / sh, isoLo, iso)); return [sh, is, sh * is / iso]; }
+      const sh = Math.min(E, longMax), is = Math.round(C.clamp(iso * E / sh, iso, isoHi)); return [sh, is, sh * is / iso];
+    };
     let evs;
     if (o.bracketMode === 'manual') evs = manualEVs();
     else {
       evs = [0]; const st2 = o.autoStep;
-      for (let ev = -st2; ev >= -18 && t * Math.pow(2, ev) >= tMin * 0.999; ev -= st2) evs.push(ev);
-      const lowest = Math.min(...evs); if (t * Math.pow(2, lowest) / tMin > 1.3) evs.push(Math.log2(tMin / t));
+      for (let ev = -st2; ev >= -22 && t * Math.pow(2, ev) >= eMin * 0.999; ev -= st2) evs.push(ev);
+      const lowest = Math.min(...evs); if (t * Math.pow(2, lowest) / eMin > 1.3) evs.push(Math.log2(eMin / t));
       for (let ev = st2; ev <= o.shadow + 1e-6; ev += st2) evs.push(ev);
     }
-    const times = [...new Set(evs.map(ev => C.clamp(t * Math.pow(2, ev), tMin, longMax)))].sort((a, b) => a - b);
-    const uniq = []; for (const x of times) if (!uniq.length || x / uniq[uniq.length - 1] > 1.25) uniq.push(x);
-    let anchor = 0, bd = Infinity; uniq.forEach((x, i) => { const d = Math.abs(Math.log(x / t)); if (d < bd) { bd = d; anchor = i; } });
-    S.plan = { mode: 'manual', adaptive: o.bracketMode === 'auto', base: t, iso, times: uniq, steps: uniq.map(x => manualSpec(x, iso)),
-               nominal: uniq.map(x => x / t), anchor, clipT: 0.0004, darkT: o.shadow >= 4 ? 0.004 : 0.015 };
+    const steps = evs.map(ev => realise(t * Math.pow(2, ev))).sort((a, b) => a[2] - b[2]);
+    const uniq = []; for (const x of steps) if (!uniq.length || x[2] / uniq[uniq.length - 1][2] > 1.25) uniq.push(x);
+    let anchor = 0, bd = Infinity; uniq.forEach((x, i) => { const d = Math.abs(Math.log(x[2] / t)); if (d < bd) { bd = d; anchor = i; } });
+    S.plan = { mode: 'manual', adaptive: o.bracketMode === 'auto', base: t, iso, times: uniq.map(x => x[2]), shutter: uniq.map(x => x[0]),
+               isos: isoC ? uniq.map(x => x[1]) : null, steps: uniq.map(x => manualSpec(x[0], isoC ? x[1] : null)),
+               nominal: uniq.map(x => x[2] / t), anchor, clipT: 0.0004, darkT: o.shadow >= 4 ? 0.004 : 0.015 };
   } else if (cam.mode === 'ev') {
     const ec = c.exposureCompensation, step = ec.step || 1 / 3, r = v => C.clamp(Math.round(v / step) * step, ec.min, ec.max);
     const n = o.bracketMode === 'manual' ? Math.max(3, o.count) : 5;
@@ -523,7 +535,7 @@ async function captureShot(target) {
   vibrate(20);
   S.state = 'aim'; S.still.since = performance.now(); ui(); updateCounter();
   const left = S.targets.filter(t => !t.done).length;
-  status(left ? 'Next: black dot' : 'All directions captured', `${si.length} exposure${si.length > 1 ? 's' : ''}${P.mode === 'manual' ? ' · ' + fmtTime(P.times[si[0]]) + ' – ' + fmtTime(P.times[si[si.length - 1]]) : ''}`);
+  status(left ? 'Next: black dot' : 'All directions captured', `${si.length} exposure${si.length > 1 ? 's' : ''}${P.mode === 'manual' ? ' · ' + fmtStep(si[0]) + ' – ' + fmtStep(si[si.length - 1]) : ''}`);
   saveSession();
   if (!left) setTimeout(finish, 350);
 }
@@ -668,10 +680,14 @@ const bar = p => { $('busyBar').style.width = (C.clamp(p, 0, 1) * 100).toFixed(0
 async function processResult({ align }) {
   setBusy(true, 'Preparing…', 0);
   const f = () => C.focalPx(S.work.long, S.lens);
-  if (S.plan.mode !== 'manual' && S.shots.length > 1) {
+  const balance = async () => {   // per-shot brightness match from the overlaps (small in manual mode, larger with auto-exposure)
+    if (S.shots.length < 2) return;
     setBusy(true, 'Balancing exposures…'); await sleep(20);
-    const g = C.harmonizeGains(S.shots, f(), S.k1); S.shots.forEach((s, i) => s.gain = g[i]);
-  }
+    const g = C.harmonizeGains(S.shots.map(s => ({ ...s, gain: 1 })), f(), S.k1);
+    const lim = S.plan.mode === 'manual' ? 0.15 : 3;
+    S.shots.forEach((s, i) => s.gain = Math.exp(C.clamp(Math.log(g[i]), -lim, lim)));
+  };
+  await balance();
   if (align && S.shots.length >= 3) {
     S.shots.forEach(s => s.M = s.M0);
     setBusy(true, 'Aligning · lens', 0);
@@ -683,6 +699,7 @@ async function processResult({ align }) {
     r = await C.fitLensK(S.shots, S.work.long, S.lens, S.k1, { fine: true, onProgress: p => bar(0.8 + p * 0.2) });
     if (isFinite(r.error)) { S.lens = r.lens; S.k1 = r.k1; }
     S.aligned = true;
+    await balance();
   }
   await stitchNow();
 }
@@ -898,7 +915,7 @@ function wire() {
     ov.addEventListener('pointerdown', e => { if (!S.orient || !S.orient.sim) return; drag = { x: e.clientX, y: e.clientY, yaw: S.orient.sim.yaw, pitch: S.orient.sim.pitch }; ov.setPointerCapture(e.pointerId); });
     ov.addEventListener('pointermove', e => { if (!drag) return; S.orient.sim.yaw = drag.yaw - (e.clientX - drag.x) * 0.15; S.orient.sim.pitch = C.clamp(drag.pitch + (e.clientY - drag.y) * 0.15, -90, 90); });
     ov.addEventListener('pointerup', () => drag = null);
-    window.simLook = (yaw, pitch, roll = 0) => Object.assign(S.orient.sim, { yaw, pitch, roll });
+    window.simLook = (yaw, pitch, roll = 0, ey = 0, ep = 0, er = 0) => Object.assign(S.orient.sim, { yaw, pitch, roll, ey, ep, er });
   }
 }
 wire();
